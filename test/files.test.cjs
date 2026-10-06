@@ -5,11 +5,10 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
+const { createWorkspace, launchApp, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
 
-/** The checkout next to this repository runs this plugin; its Electron launches the app. */
+/** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
-const { _electron: electron } = require(join(app ?? '../WangCai', 'node_modules/playwright'));
 
 test('view picker browses current terminal directory; file links preview code, Markdown, HTML and images', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-files-')));
@@ -31,7 +30,7 @@ test('view picker browses current terminal directory; file links preview code, M
     writeFileSync(html, '<!doctype html>\n<!-- HTML_SOURCE -->\n<h1 id="heading">Rendered page</h1>\n<script>document.getElementById("heading").dataset.scripted = "yes"</script>\n');
     writeFileSync(binary, Buffer.from([0, 1, 255, 2]));
     writeFileSync(image, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'));
-    desktop = await electron.launch({ executablePath: require(join(app, 'node_modules/electron')), args: [join(app, 'desktop'), `--user-data-dir=${join(home, 'electron')}`], cwd: app, env });
+    desktop = await launchApp(home, env);
     let page = await desktop.firstWindow();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -314,7 +313,7 @@ test('view picker browses current terminal directory; file links preview code, M
     devServer = await createServer({ ...config.renderer, configFile: false, server: { port: 0, host: '127.0.0.1' } });
     await devServer.listen();
     env.ELECTRON_RENDERER_URL = `http://127.0.0.1:${devServer.httpServer.address().port}`;
-    desktop = await electron.launch({ executablePath: require(join(app, 'node_modules/electron')), args: [join(app, 'desktop'), `--user-data-dir=${join(home, 'electron')}`], cwd: app, env });
+    desktop = await launchApp(home, env);
     page = await desktop.firstWindow();
     await waitForShell(page);
     // A plugin subscribes to clicks as it mounts, so the click is repeated until its preview answers.

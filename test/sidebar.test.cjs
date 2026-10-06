@@ -4,14 +4,13 @@ const { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSyn
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
+const { createWorkspace, launchApp, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
 
-/** The checkout next to this repository runs these plugins; its Electron launches the app. */
+/** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
-const { _electron: electron } = require(join(app ?? '../WangCai', 'node_modules/playwright'));
 
 test('view menu switches plugins and handles empty and closed terminals', { timeout: 180000 }, async () => {
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-views-')));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-sidebar-')));
   const env = { ...process.env, HOME: home, WANGCAI_HOME: '', SHELL: '/bin/bash', ELECTRON_RENDERER_URL: '' };
   delete env.ELECTRON_RUN_AS_NODE;
   let desktop;
@@ -33,7 +32,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     mkdirSync(join(home, '子目录 with spaces'));
     writeFileSync(join(home, '子目录 with spaces', '空 格.md'), '# Nested preview');
     writeFileSync(join(home, '.hidden.md'), '# Hidden preview');
-    desktop = await electron.launch({ executablePath: require(join(app, 'node_modules/electron')), args: [join(app, 'desktop'), `--user-data-dir=${join(home, 'electron')}`], cwd: app, env });
+    desktop = await launchApp(home, env);
     let page = await desktop.firstWindow();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -211,7 +210,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     const ratios = await page.evaluate(() => JSON.parse(localStorage.getItem('sidebar-ratios')));
     const windowWidth = await page.evaluate(() => innerWidth);
     await desktop.close(); desktop = undefined;
-    desktop = await electron.launch({ executablePath: require(join(app, 'node_modules/electron')), args: [join(app, 'desktop'), `--user-data-dir=${join(home, 'electron')}`], cwd: app, env });
+    desktop = await launchApp(home, env);
     page = await desktop.firstWindow();
     await page.getByRole('button', { name: '切换右侧栏' }).click();
     await page.getByRole('button', { name: '新建侧栏标签页' }).click();
