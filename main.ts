@@ -1,6 +1,6 @@
 import { join } from 'node:path';
-import { connect, type MachineConnection } from '@wangcai/sdk';
-import type { MainContext } from '@wangcai/sdk/channel';
+import { connect, type MachineConnection } from '@lengmoxxl/sdk';
+import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { imageMime, type FileClick } from './shared';
 
 // Which fields this plugin takes from init.ts, and the default each one falls back to.

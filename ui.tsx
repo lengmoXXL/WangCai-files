@@ -7,8 +7,8 @@ import 'monaco-editor/basic-languages/monaco.contribution.js';
 import 'monaco-editor/languages/features/json/jsonMode.js';
 import { jsonDefaults } from 'monaco-editor/languages/features/json/register.js';
 import 'monaco-editor/editor/contrib/find/browser/findController.js';
-import type { DirectoryEntry, Theme, WorkspaceActive } from '@wangcai/sdk';
-import type { TabRecord, UiContext } from '@wangcai/sdk/channel';
+import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
+import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { imageMime, type FileClick, type Font, type Settings } from './shared';
 import './style.css';
 

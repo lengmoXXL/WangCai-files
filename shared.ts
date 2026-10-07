@@ -1,5 +1,5 @@
-import type { Profile } from '@wangcai/sdk';
-export type { FileClick } from '@wangcai/sdk';
+import type { Profile } from '@lengmoxxl/sdk';
+export type { FileClick } from '@lengmoxxl/sdk';
 
 // The config this plugin accepts: main.ts declares a schema for the same fields.
 export type Font = { family: string; size: number; lineHeight?: number };
