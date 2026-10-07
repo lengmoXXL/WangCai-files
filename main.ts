@@ -1,5 +1,4 @@
-import { join } from 'node:path';
-import { connect, type MachineConnection } from '@lengmoxxl/sdk';
+import type { MachineConnection } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { imageMime, type FileClick } from './shared';
 
@@ -20,9 +19,7 @@ export function activate(context: MainContext) {
     pending.add(controller);
     let connection: MachineConnection | undefined;
     try {
-      connection = await connect(machine.host
-        ? { type: 'ssh', host: machine.host, agent: context.host.agent, signal: controller.signal }
-        : { type: 'local', binary: join(context.host.resourcesDirectory, 'wangcai'), signal: controller.signal });
+      connection = await context.connect(machine, controller.signal);
       controller.signal.throwIfAborted();
       connections.add(connection);
       if (method === 'list') {
