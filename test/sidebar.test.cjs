@@ -14,8 +14,8 @@ test('view menu switches plugins and handles empty and closed terminals', { time
   const env = testEnv(home);
   let desktop;
   try {
-    writeInit(home, { workspaces: ['terminal-agent'], tabs: ['files', 'other'] });
     const other = join(home, '.local/share/wangcai/plugins/other');
+    writeInit(home, { workspaces: ['terminal-agent'], tabs: ['files', { id: 'other', directory: other }] });
     mkdirSync(other, { recursive: true });
     writeFileSync(join(other, 'main.cjs'), 'exports.activate = () => {};');
     writeFileSync(join(other, 'ui.js'), `
@@ -70,8 +70,8 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await directory.getByRole('button', { name: '子目录 with spaces/', exact: true }).locator('svg[data-kind=folder]').waitFor();
     assert.equal(await page.locator('.workspace.selected').evaluate((element) => getComputedStyle(element).backgroundColor),
       await page.locator('.sidebar-tab:has([aria-selected=true])').first().evaluate((element) => getComputedStyle(element).backgroundColor));
-    // The column rounds its top left, so does the tab above the pane, and the selected row stays square.
-    for (const [selector, corners] of [['.sidebar-left', '8px 0px 0px'], ['.workspace.selected', '0px'], ['.sidebar-tab:has([aria-selected=true])', '8px 8px 0px 0px']]) {
+    // The column rounds both its left corners, so does the tab above the pane, and the selected row stays square.
+    for (const [selector, corners] of [['.sidebar-left', '8px 0px 0px 8px'], ['.workspace.selected', '0px'], ['.sidebar-tab:has([aria-selected=true])', '8px 8px 0px 0px']]) {
       assert.equal(await page.locator(selector).first().evaluate((element) => getComputedStyle(element).borderRadius), corners);
     }
     // The hairline sits on a pseudo-element, so selecting a row or a tab never moves its icon.
