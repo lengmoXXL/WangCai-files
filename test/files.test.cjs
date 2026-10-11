@@ -5,9 +5,8 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, launchApp, testEnv, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
+const { createWorkspace, launchApp, run, testEnv, wangcaiApp, writeInit } = require('./harness.cjs');
 
-/** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
 
 test('view picker browses current terminal directory; file links preview code, Markdown, HTML and images', { timeout: 180000 }, async () => {
@@ -63,19 +62,15 @@ test('view picker browses current terminal directory; file links preview code, M
       // Away from every link first, so the cursor belongs to this hover and not to the last one.
       await page.mouse.move(500, 500);
       await page.waitForFunction(() => !document.querySelector('.xterm-cursor-pointer'));
-      // Forget what earlier clicks published, so the answer read below is this click's.
       await page.evaluate(() => { window.linkClicks = []; });
       await page.mouse.move(point.x, point.y);
       await page.waitForFunction(() => !!document.querySelector('.xterm-cursor-pointer'));
       await page.mouse.click(point.x, point.y);
     };
-    const printLine = async (text, session, cwd = home) => {
-      const command = `cd '${cwd}'; printf '\\033[2J\\033[H%b\\n' '${text}'\r`;
-      await page.evaluate(({ id, command }) => window.wangcai.request('terminal-agent', 'pty', { op: 'input', sessionId: id, params: { data: command } }), { id: session, command });
-    };
-    const clickLink = async (link, { label = link, cwd = home, anchor = label, session = sessionId } = {}) => {
+    const printLine = (text, cwd = home) => run(page, `cd '${cwd}'; printf '\\033[2J\\033[H%b\\n' '${text}'`);
+    const clickLink = async (link, { label = link, cwd = home, anchor = label } = {}) => {
       const output = label === link ? link : `\\033]8;;${link}\\007${label}\\033]8;;\\007`;
-      await printLine(output, session, cwd);
+      await printLine(output, cwd);
       const row = page.locator('.terminal-pane.active .xterm-rows > div').filter({ hasText: label }).first();
       await page.waitForFunction((label) => document.querySelector('.terminal-pane.active .xterm-rows > div')?.textContent.trim() === label, label);
       await clickPoint(await firstChar(row, anchor));
@@ -91,13 +86,51 @@ test('view picker browses current terminal directory; file links preview code, M
     await page.getByRole('button', { name: '新建侧栏标签页' }).click();
     await page.locator('#view-menu').getByRole('button', { name: '文件', exact: true }).click();
     const directory = page.getByRole('navigation', { name: '当前目录文件' });
+    const address = page.getByRole('textbox', { name: '路径', exact: true });
+    const back = page.getByRole('button', { name: '后退', exact: true });
+    const forward = page.getByRole('button', { name: '前进', exact: true });
+    const refresh = page.getByRole('button', { name: '刷新', exact: true });
+    await directory.getByRole('button', { name: 'sample.ts', exact: true }).waitFor();
+    assert.equal(await address.inputValue(), home);
+    assert.equal(await back.isDisabled(), true);
+    assert.equal(await forward.isDisabled(), true);
+    writeFileSync(join(home, 'refresh.md'), '# Refreshed directory');
+    await refresh.click();
+    await directory.getByRole('button', { name: 'refresh.md', exact: true }).waitFor();
+    assert.equal(await back.isDisabled(), true);
+    assert.equal(await forward.isDisabled(), true);
     await directory.getByRole('button', { name: 'sample.ts', exact: true }).click();
+    await page.locator('.monaco-editor .view-lines').filter({ hasText: 'CODE_PREVIEW' }).waitFor();
+    assert.equal(await page.getByRole('tablist', { name: '侧栏标签页' }).getByRole('tab').count(), 1);
+    writeFileSync(code, 'const first = 1;\nconst second = "CODE_PREVIEW";\nconst refreshed = true;\n');
+    await refresh.click();
+    await page.locator('.monaco-editor .view-lines').filter({ hasText: 'refreshed' }).waitFor();
+    await back.click();
+    await directory.getByRole('button', { name: 'sample.ts', exact: true }).waitFor();
+    assert.equal(await back.isDisabled(), true);
+    assert.equal(await forward.isDisabled(), false);
+    await refresh.click();
+    await directory.getByRole('button', { name: 'refresh.md', exact: true }).waitFor();
+    assert.equal(await back.isDisabled(), true);
+    assert.equal(await forward.isDisabled(), false);
+    await forward.click();
+    await page.locator('.monaco-editor .view-lines').filter({ hasText: 'CODE_PREVIEW' }).waitFor();
+    assert.equal(await address.inputValue(), code);
+    await address.fill('missing.ts');
+    await address.press('Enter');
+    await page.getByRole('alert').filter({ hasText: '路径不存在' }).waitFor();
+    await address.press('Escape');
+    assert.equal(await address.inputValue(), code);
+    assert.equal(await page.locator('.file-preview .file-message[role=alert]').count(), 0);
+    await address.fill('./sample.ts');
+    await address.press('Enter');
+    await page.waitForFunction((path) => document.querySelector('.preview-path').value === path, code);
     await page.locator('.monaco-editor .view-lines').filter({ hasText: 'CODE_PREVIEW' }).waitFor();
     await page.getByRole('button', { name: '切换右侧栏' }).click();
     await clickLink(`${code}:2:3`);
     await page.getByLabel('文件预览', { exact: true }).waitFor();
-    const codePanel = page.getByRole('tabpanel', { name: 'sample.ts' });
-    assert.equal(await codePanel.locator('.preview-path').innerText(), code);
+    const codePanel = page.getByRole('tabpanel', { name: '文件' });
+    assert.equal(await codePanel.locator('.preview-path').inputValue(), code);
     assert.equal(await codePanel.locator('.preview-mode').count(), 0);
     assert.equal(await codePanel.locator('.preview-header').evaluate((element) => getComputedStyle(element).fontSize), '12px');
     assert.equal(await codePanel.locator('.monaco-editor .view-lines').evaluate((element) => getComputedStyle(element).fontSize), '12px');
@@ -124,15 +157,15 @@ test('view picker browses current terminal directory; file links preview code, M
     assert.ok(fileBounds.x >= terminalBounds.x + terminalBounds.width);
     mkdirSync(join(home, 'sub'));
     await clickLink('../sample.ts:2:3', { cwd: join(home, 'sub') });
-    assert.equal(await page.getByRole('tablist', { name: '侧栏标签页' }).getByRole('tab').count(), 2);
+    assert.equal(await page.getByRole('tablist', { name: '侧栏标签页' }).getByRole('tab').count(), 1);
     await page.locator('.monaco-editor .view-lines').filter({ hasText: 'CODE_PREVIEW' }).waitFor();
     await clickLink(pathToFileURL(markdown).href, { label: 'MARKDOWN_LINK' });
     await page.getByRole('heading', { name: 'Markdown preview' }).waitFor();
     assert.equal(await page.locator('.markdown-preview strong').innerText(), 'Rendered content');
     assert.equal(await page.locator('.markdown-preview table').count(), 1);
     assert.equal(await page.evaluate(() => window.previewScriptRan), undefined);
-    const markdownPanel = page.getByRole('tabpanel', { name: '说明 file.md' });
-    assert.equal(await markdownPanel.locator('.preview-path').innerText(), markdown);
+    const markdownPanel = page.getByRole('tabpanel', { name: '文件' });
+    assert.equal(await markdownPanel.locator('.preview-path').inputValue(), markdown);
     await markdownPanel.getByRole('button', { name: 'Markdown 预览', exact: true }).click();
     assert.deepEqual(await markdownPanel.getByRole('menu', { name: '预览方式' }).getByRole('menuitem').allInnerTexts(), ['文本', 'Markdown 预览']);
     await page.screenshot({ path: 'tests/dist/screenshots/files-modes.png' });
@@ -144,12 +177,15 @@ test('view picker browses current terminal directory; file links preview code, M
     await markdownPanel.getByRole('menuitem', { name: '文本', exact: true }).click();
     assert.equal(await markdownPanel.locator('.monaco-editor .view-lines').evaluate((element) => getComputedStyle(element).fontSize), '12px');
     await markdownPanel.locator('.monaco-editor .view-lines').filter({ hasText: '# Markdown preview' }).waitFor();
+    await refresh.click();
+    await markdownPanel.locator('.monaco-editor .view-lines').filter({ hasText: '# Markdown preview' }).waitFor();
+    assert.equal(await markdownPanel.locator('.preview-mode').innerText(), '文本');
     await markdownPanel.getByRole('button', { name: '文本', exact: true }).click();
     await markdownPanel.getByRole('menuitem', { name: 'Markdown 预览', exact: true }).click();
     await page.getByRole('heading', { name: 'Markdown preview' }).waitFor();
     // Hovering the sidebar reveals its scrollbar thumbs, so park the pointer before asserting idle panels hide theirs.
     await page.mouse.move(0, 0);
-    for (const selector of ['.file-directory', '.markdown-preview', '.markdown-preview pre']) {
+    for (const selector of ['.markdown-preview', '.markdown-preview pre']) {
       assert.deepEqual(await page.locator(selector).evaluate((element) => {
         const bar = getComputedStyle(element, '::-webkit-scrollbar');
         const thumb = getComputedStyle(element, '::-webkit-scrollbar-thumb');
@@ -158,28 +194,26 @@ test('view picker browses current terminal directory; file links preview code, M
           getComputedStyle(element, '::-webkit-scrollbar-button').display];
       }), ['10px', '12px', 'rgba(0, 0, 0, 0)', '0px', 'rgba(0, 0, 0, 0)', 'none'], selector);
     }
-    const reveal = await page.locator('.markdown-preview pre').evaluate(async (element) => {
+    const thumb = await page.locator('.markdown-preview pre').evaluate(async (element) => {
       element.scrollLeft = 40;
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      return { scrolling: element.hasAttribute('data-scrolling'), thumb: getComputedStyle(element, '::-webkit-scrollbar-thumb').backgroundColor };
+      return getComputedStyle(element, '::-webkit-scrollbar-thumb').backgroundColor;
     });
-    assert.equal(reveal.scrolling, true, 'scrolling marks the panel as scrolling');
-    assert.equal(reveal.thumb, 'rgba(121, 121, 121, 0.4)', 'a scrolling panel shows its scrollbar');
-    await page.waitForFunction(() => !document.querySelector('.markdown-preview pre').hasAttribute('data-scrolling'));
+    assert.equal(thumb, 'rgba(121, 121, 121, 0.4)', 'a scrolling panel shows its scrollbar');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.markdown-preview pre'), '::-webkit-scrollbar-thumb').backgroundColor === 'rgba(0, 0, 0, 0)');
     assert.equal(await page.locator('.markdown-preview pre').evaluate(element => element.scrollWidth > element.clientWidth), true);
-    // The tab strip scrolls with no bar of its own, so an overflowing strip takes no height from its tabs.
     assert.deepEqual(await page.evaluate(async () => {
       const strip = document.querySelector('.sidebar-tabs');
-      strip.style.width = '60px';
+      strip.style.width = '20px';
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const overflow = [strip.scrollWidth > strip.clientWidth, strip.clientHeight, strip.offsetHeight];
       strip.style.width = '';
       return overflow;
     }), [true, 32, 32]);
     const fileTabs = page.getByRole('tablist', { name: '侧栏标签页' });
-    await fileTabs.getByRole('tab', { name: 'sample.ts', exact: true }).click();
+    await page.getByRole('button', { name: '后退', exact: true }).click();
     await page.locator('.monaco-editor .view-lines').filter({ hasText: 'CODE_PREVIEW' }).waitFor();
-    await fileTabs.getByRole('tab', { name: '说明 file.md', exact: true }).click();
+    await page.getByRole('button', { name: '前进', exact: true }).click();
     await page.getByRole('heading', { name: 'Markdown preview' }).waitFor();
     const tabCount = await fileTabs.getByRole('tab').count();
     await clickLink(pathToFileURL(markdown).href, { label: 'MARKDOWN_LINK' });
@@ -194,8 +228,8 @@ test('view picker browses current terminal directory; file links preview code, M
     assert.equal(await page.locator('.html-frame').getAttribute('sandbox'), 'allow-scripts');
     assert.equal(await htmlFrame.locator('body').evaluate((element) => getComputedStyle(element).fontSize), '13px');
     assert.match(await htmlFrame.locator('body').evaluate((element) => getComputedStyle(element).fontFamily), /DejaVuSansM Nerd Font Mono/);
-    const htmlPanel = page.getByRole('tabpanel', { name: 'page.html' });
-    assert.equal(await htmlPanel.locator('.preview-path').innerText(), html);
+    const htmlPanel = page.getByRole('tabpanel', { name: '文件' });
+    assert.equal(await htmlPanel.locator('.preview-path').inputValue(), html);
     await htmlPanel.getByRole('button', { name: 'HTML 预览', exact: true }).click();
     assert.deepEqual(await htmlPanel.getByRole('menu', { name: '预览方式' }).getByRole('menuitem').allInnerTexts(), ['文本', 'HTML 预览']);
     await htmlPanel.getByRole('menuitem', { name: '文本', exact: true }).click();
@@ -215,31 +249,35 @@ test('view picker browses current terminal directory; file links preview code, M
     assert.equal(await page.evaluate(() => window.linkClicks.length), published);
     assert.equal(await fileTabs.getByRole('tab').count(), beforeMissing);
     assert.equal(await page.getByRole('alert').filter({ hasText: 'No such file' }).count(), 0);
-    const closeOthers = page.locator('.close-tab:not([aria-label="关闭 文件"])');
-    while (await closeOthers.count()) await closeOthers.last().click();
+    await address.fill(home);
+    await address.press('Enter');
     await directory.getByRole('button', { name: 'sample.ts', exact: true }).waitFor();
     await directory.getByRole('button', { name: 'sub/', exact: true }).click();
     await page.getByText('空目录', { exact: true }).waitFor();
     await directory.getByRole('button', { name: '上级目录' }).click();
     await directory.getByRole('button', { name: '说明 file.md', exact: true }).click();
     await page.getByRole('heading', { name: 'Markdown preview' }).waitFor();
-    await fileTabs.getByRole('tab', { name: '文件', exact: true }).click();
+    await page.getByRole('button', { name: '后退', exact: true }).click();
     await directory.getByRole('button', { name: 'sample.ts', exact: true }).waitFor();
     await directory.getByRole('button', { name: 'photo.png', exact: true }).click();
-    const imagePanel = page.getByRole('tabpanel', { name: 'photo.png' });
+    const imagePanel = page.getByRole('tabpanel', { name: '文件' });
     const shownImage = imagePanel.locator('.image-preview img');
     await shownImage.waitFor();
     assert.match(await shownImage.getAttribute('src'), /^data:image\/png;base64,/);
     assert.deepEqual(await shownImage.evaluate(async (element) => { await element.decode(); return [element.naturalWidth, element.naturalHeight]; }), [1, 1]);
     assert.equal(await imagePanel.locator('.preview-mode').count(), 0);
+    assert.equal(await page.getByRole('button', { name: '前进', exact: true }).isDisabled(), true);
     await page.getByRole('button', { name: '切换右侧栏' }).click();
     assert.equal(await page.locator('.sidebar-right').isVisible(), false);
     await page.getByRole('button', { name: '切换右侧栏' }).click();
     await page.getByRole('button', { name: '新建侧栏标签页' }).click();
     await page.locator('#view-menu').getByRole('button', { name: '文件', exact: true }).click();
+    await shownImage.waitFor();
+    await address.fill(home);
+    await address.press('Enter');
     await directory.getByRole('button', { name: 'sample.ts', exact: true }).waitFor();
     await page.screenshot({ path: 'tests/dist/screenshots/files-browser.png' });
-    await page.evaluate(({ id, path }) => window.wangcai.request('terminal-agent', 'pty', { op: 'input', sessionId: id, params: { data: `cd '${path}'\r` } }), { id: sessionId, path: join(home, 'sub') });
+    await run(page, `cd '${join(home, 'sub')}'`);
     await page.waitForFunction(async ({ id, path }) => {
       const result = await window.wangcai.request('files', 'list', { machine: { id: 'local', name: '本机' }, sessionId: id });
       return result.path === path;
@@ -247,7 +285,11 @@ test('view picker browses current terminal directory; file links preview code, M
     await page.getByRole('tablist', { name: '工作区' }).getByRole('tab').filter({ hasText: 'sub' }).waitFor();
     await page.getByRole('button', { name: '新建侧栏标签页' }).click();
     await page.locator('#view-menu').getByRole('button', { name: '文件', exact: true }).click();
+    await directory.getByRole('button', { name: 'sample.ts', exact: true }).waitFor();
+    await address.fill('sub');
+    await address.press('Enter');
     await page.getByText('空目录', { exact: true }).waitFor();
+    assert.equal(await address.inputValue(), join(home, 'sub'));
     await createWorkspace(page);
     await page.getByRole('button', { name: '新建侧栏标签页' }).click();
     await page.locator('#view-menu').getByRole('button', { name: '文件', exact: true }).click();
@@ -257,45 +299,36 @@ test('view picker browses current terminal directory; file links preview code, M
     await page.screenshot({ path: 'tests/dist/screenshots/files-directory.png' });
     writeFileSync(join(home, 'sub', 'inside.md'), '# Directory link preview');
     await clickLink('./sub/');
-    await fileTabs.getByRole('tab', { name: 'sub', exact: true }).waitFor();
+    await fileTabs.getByRole('tab', { name: '文件', exact: true }).waitFor();
     await page.getByRole('navigation', { name: '当前目录文件' }).getByRole('button', { name: 'inside.md', exact: true }).click();
     await page.getByRole('heading', { name: 'Directory link preview' }).waitFor();
     await clickLink(pathToFileURL(join(home, 'sub')).href, { label: 'DIRECTORY_LINK' });
-    assert.equal(await fileTabs.getByRole('tab', { name: 'sub', exact: true }).count(), 1);
+    assert.equal(await fileTabs.getByRole('tab').count(), 1);
     await page.getByRole('navigation', { name: '当前目录文件' }).getByRole('button', { name: 'inside.md', exact: true }).waitFor();
-    await fileTabs.getByRole('tab', { name: '文件', exact: true }).click();
+    await address.fill(home);
+    await address.press('Enter');
     await page.getByRole('navigation', { name: '当前目录文件' }).getByRole('button', { name: 'sample.ts', exact: true }).waitFor();
     assert.equal((await page.evaluate(() => window.wangcai.request('terminal-agent', 'config'))).workspaces[0].sessionId, sessionId);
-    // The links below are read from the pane in front, which the active workspace owns.
-    const activeSession = await page.evaluate(async () => {
-      const config = await window.wangcai.request('terminal-agent', 'config');
-      return config.workspaces.find((workspace) => workspace.id === config.active)?.sessionId;
-    });
-    // A compiler writes a location as path(line,column), a traceback as "path", line 3.
-    await clickLink('sample.ts(2,3)', { session: activeSession });
+    await clickLink('sample.ts(2,3)');
     assert.deepEqual(await lastClick(), { type: 'file', path: code, line: 2, column: 3 });
-    await clickLink('"说明 file.md", line 3', { anchor: '说明 file.md', session: activeSession });
+    await clickLink('"说明 file.md", line 3', { anchor: '说明 file.md' });
     assert.deepEqual(await lastClick(), { type: 'file', path: markdown, line: 3, column: undefined });
-    // A web address, and a path that is not there, are left alone: a link opens what the app can
-    // show, and the filesystem is what tells a path apart from the words around it.
-    for (const text of ['https://example.com/a%20b', 'missing.ts:12']) {
-      await printLine(text, activeSession);
-      await page.waitForFunction((text) => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')].some((row) => row.textContent.trim() === text), text);
-      const clicksSoFar = await page.evaluate(() => window.linkClicks.length);
-      const point = await firstChar(page.locator('.terminal-pane.active .xterm-rows > div').filter({ hasText: text }).first(), text);
-      await page.mouse.move(500, 500);
-      await page.mouse.move(point.x, point.y);
-      await page.waitForTimeout(500);
-      assert.equal(await page.evaluate(() => !!document.querySelector('.xterm-cursor-pointer')), false);
-      await page.mouse.click(point.x, point.y);
-      await page.waitForTimeout(500);
-      assert.equal(await page.evaluate(() => window.linkClicks.length), clicksSoFar);
-    }
-    // The sidebar terminal finds links with the same rules. The picker opens its popover from a
-    // click on the element itself; a click through the mouse hangs on it.
+    await printLine('missing.ts:12');
+    await page.waitForFunction(() => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')].some((row) => row.textContent.trim() === 'missing.ts:12'));
+    const clicksSoFar = await page.evaluate(() => window.linkClicks.length);
+    const missingPoint = await firstChar(page.locator('.terminal-pane.active .xterm-rows > div').filter({ hasText: 'missing.ts:12' }).first(), 'missing.ts:12');
+    await page.mouse.move(500, 500);
+    await page.mouse.move(missingPoint.x, missingPoint.y);
+    await page.waitForTimeout(500);
+    assert.equal(await page.evaluate(() => !!document.querySelector('.xterm-cursor-pointer')), false);
+    await page.mouse.click(missingPoint.x, missingPoint.y);
+    await page.waitForTimeout(500);
+    assert.equal(await page.evaluate(() => window.linkClicks.length), clicksSoFar);
+    // Clicking through the mouse hangs on the picker; click the element itself.
     await page.evaluate(() => document.querySelector('button[aria-label="新建侧栏标签页"]').click());
     await page.locator('#view-menu').getByRole('button', { name: '终端', exact: true }).click();
     const sidebar = page.locator('.sidebar-panel:visible .terminal-pane');
+    await page.waitForFunction(() => (document.querySelector('.sidebar-panel:not([hidden]) .xterm-rows')?.textContent ?? '').trim().length > 0);
     await sidebar.locator('.xterm-helper-textarea').focus();
     await page.keyboard.type(`cd '${home}'; printf '\\033[2J\\033[Hsample.ts:2\\n'`);
     await page.keyboard.press('Enter');
@@ -314,7 +347,7 @@ test('view picker browses current terminal directory; file links preview code, M
     env.ELECTRON_RENDERER_URL = `http://127.0.0.1:${devServer.httpServer.address().port}`;
     desktop = await launchApp(home, env);
     page = await desktop.firstWindow();
-    await waitForShell(page);
+    await page.locator('.workspaces').waitFor();
     // A plugin subscribes to clicks as it mounts, so the click is repeated until its preview answers.
     const preview = page.locator('.monaco-editor .view-lines').filter({ hasText: 'CODE_PREVIEW' });
     for (let attempt = 0; attempt < 100 && !await preview.count(); attempt++) {

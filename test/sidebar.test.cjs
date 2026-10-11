@@ -1,12 +1,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync } = require('node:fs');
+const { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, launchApp, testEnv, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
+const { createWorkspace, launchApp, run, testEnv, wangcaiApp, writeInit } = require('./harness.cjs');
 
-/** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
 
 test('view menu switches plugins and handles empty and closed terminals', { timeout: 180000 }, async () => {
@@ -36,7 +35,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-    await waitForShell(page);
+    await page.locator('.workspaces').waitFor();
     const toggle = page.getByRole('button', { name: '切换右侧栏' });
     await toggle.click();
     const picker = page.getByRole('button', { name: '新建侧栏标签页' });
@@ -65,12 +64,14 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await picker.click();
     await menu.getByRole('button', { name: '文件', exact: true }).click();
     await createWorkspace(page);
+    await createWorkspace(page);
+    const workspaces = page.getByRole('tablist', { name: '工作区' }).getByRole('tab');
+    await workspaces.first().click();
     const directory = page.getByRole('navigation', { name: '当前目录文件' });
     await directory.getByRole('button', { name: '.hidden.md', exact: true }).locator('svg[data-kind=file]').waitFor();
     await directory.getByRole('button', { name: '子目录 with spaces/', exact: true }).locator('svg[data-kind=folder]').waitFor();
     assert.equal(await page.locator('.workspace.selected').evaluate((element) => getComputedStyle(element).backgroundColor),
       await page.locator('.sidebar-tab:has([aria-selected=true])').first().evaluate((element) => getComputedStyle(element).backgroundColor));
-    // The column rounds both its left corners, so does the tab above the pane, and the selected row stays square.
     for (const [selector, corners] of [['.sidebar-left', '8px 0px 0px 8px'], ['.workspace.selected', '0px'], ['.sidebar-tab:has([aria-selected=true])', '8px 8px 0px 0px']]) {
       assert.equal(await page.locator(selector).first().evaluate((element) => getComputedStyle(element).borderRadius), corners);
     }
@@ -83,7 +84,6 @@ test('view menu switches plugins and handles empty and closed terminals', { time
       const hairline = getComputedStyle(element, '::after');
       return [getComputedStyle(element).boxShadow, hairline.position, hairline.right, hairline.width, hairline.backgroundColor, hairline.pointerEvents];
     }), ['none', 'absolute', '0px', '1px', 'rgb(51, 53, 54)', 'none']);
-    // The list's rows run to the column hairline, so an overflowing list gives up no width to a bar.
     assert.deepEqual(await page.evaluate(async () => {
       const nav = document.querySelector('.sidebar-left .workspaces');
       const pane = document.querySelector('.sidebar-left');
@@ -96,30 +96,37 @@ test('view menu switches plugins and handles empty and closed terminals', { time
       nav.style.cssText = '';
       return [overflowing, full, flush];
     }), [true, true, true]);
-    // The drag indicator and focus paint box-shadow and outline, so the hairline lives on a pseudo-element.
-    assert.deepEqual(await page.locator('.workspace.selected').evaluate((element) => {
-      element.dataset.drop = 'after';
-      element.focus({ focusVisible: true });
-      const shadow = getComputedStyle(element).boxShadow;
-      const hairline = getComputedStyle(element, '::after').borderTopWidth;
-      const ring = `${getComputedStyle(element).outlineWidth} ${getComputedStyle(element).outlineColor}`;
-      delete element.dataset.drop;
-      element.blur();
-      return [hairline, shadow.includes('inset'), ring];
-    }), ['1px', true, '2px rgb(57, 148, 188)']);
-    // The hairline yields the edge the drag indicator occupies, or the 2px accent is clipped to 1px.
-    assert.equal(await page.locator('.workspace.selected').evaluate((element) => {
-      element.dataset.drop = 'after';
-      const color = getComputedStyle(element, '::after').borderBottomColor;
-      delete element.dataset.drop;
-      return color;
-    }), 'rgba(0, 0, 0, 0)');
-    assert.equal(await page.locator('.sidebar-tab:has([aria-selected=true])').first().evaluate((element) => {
-      element.dataset.drop = 'after';
-      const color = getComputedStyle(element, '::after').borderRightColor;
-      delete element.dataset.drop;
-      return color;
-    }), 'rgba(0, 0, 0, 0)');
+    // Keyboard input is needed for :focus-visible after programmatic focus.
+    await workspaces.first().focus();
+    await page.keyboard.press('ArrowRight');
+    assert.deepEqual(await workspaces.first().evaluate((element) => {
+      const style = getComputedStyle(element);
+      return [getComputedStyle(element, '::after').borderTopWidth, `${style.outlineWidth} ${style.outlineColor}`];
+    }), ['1px', '2px rgb(57, 148, 188)']);
+    for (const [source, selector, x, y, edge] of [
+      [workspaces.last(), '.workspace.selected', 0.5, 0.85, 'borderBottomColor'],
+      [page.locator('.sidebar-tab').last(), '.sidebar-tab:has([aria-selected=true])', 0.85, 0.5, 'borderRightColor'],
+    ]) {
+      const from = await source.boundingBox();
+      await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+      await page.mouse.down();
+      const target = page.locator(selector).first();
+      const to = await target.boundingBox();
+      await page.mouse.move(to.x + to.width * x, to.y + to.height * y, { steps: 6 });
+      // Native dragover needs a second move after dragstart.
+      await page.mouse.move(to.x + to.width * x, to.y + to.height * y);
+      await page.waitForFunction((selector) => getComputedStyle(document.querySelector(selector)).boxShadow.includes('inset'), selector);
+      assert.deepEqual(await target.evaluate((element, edge) => {
+        const hairline = getComputedStyle(element, '::after');
+        return [hairline.borderTopWidth, getComputedStyle(element).boxShadow.includes('inset'), hairline[edge]];
+      }, edge), ['1px', true, 'rgba(0, 0, 0, 0)']);
+      await page.keyboard.press('Escape');
+      await page.mouse.up();
+      await page.waitForFunction((selector) => getComputedStyle(document.querySelector(selector)).boxShadow === 'none', selector);
+    }
+    await workspaces.last().click({ button: 'right' });
+    await page.getByRole('menuitem', { name: '关闭工作区', exact: true }).click();
+    await workspaces.nth(1).waitFor({ state: 'detached' });
     // A running workspace's glyph shows state by lightness: it draws in the foreground colour, not the accent.
     assert.equal(await page.locator('.workspace.running .glyph').first().evaluate((element) => getComputedStyle(element).stroke), 'rgb(220, 227, 235)');
     for (const [side, label, delta, minimum, shrink] of [
@@ -161,13 +168,12 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await menu.getByRole('button', { name: '文件', exact: true }).click();
     await directory.getByRole('button', { name: '.hidden.md', exact: true }).click();
     await page.getByRole('heading', { name: 'Hidden preview' }).waitFor();
-    await page.getByRole('button', { name: '关闭 .hidden.md', exact: true }).click();
-    await page.getByRole('tab', { name: '文件', exact: true }).click();
+    await page.getByRole('button', { name: '后退', exact: true }).click();
     await directory.getByRole('button', { name: '子目录 with spaces/', exact: true }).click();
     await directory.getByRole('button', { name: '空 格.md', exact: true }).click();
     await page.getByRole('heading', { name: 'Nested preview' }).waitFor();
-    await page.getByRole('button', { name: '关闭 空 格.md', exact: true }).click();
-    await page.getByRole('tab', { name: '文件', exact: true }).click();
+    await page.getByRole('button', { name: '后退', exact: true }).click();
+    await directory.getByRole('button', { name: '上级目录' }).click();
     await directory.getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
     await page.getByRole('tab', { name: '测试视图', exact: true }).click();
     assert.equal(await page.getByLabel('视图内容').inputValue(), 'preserved');
@@ -177,7 +183,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await page.getByRole('tablist', { name: '工作区' }).getByRole('tab').waitFor({ state: 'detached' });
     assert.equal(await page.locator('.sidebar-panel[data-plugin=files]').count(), 0);
     const existing = await page.evaluate(async () => (await window.wangcai.request('terminal-agent', 'config')).workspaces.map((workspace) => workspace.id));
-    const stored = JSON.parse(readFileSync(join(home, '.local/share/wangcai', 'tabs.json'), 'utf8'));
+    const stored = await page.evaluate(() => window.wangcai.loadTabs());
     assert.deepEqual(stored.filter((record) => record.workspaceId && !existing.includes(record.workspaceId)), []);
     if (!(await page.locator('.sidebar-right').isVisible())) await toggle.click();
     await picker.click();
@@ -185,8 +191,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await noTerminal.waitFor();
     await createWorkspace(page);
     await directory.getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
-    const sessionId = await page.evaluate(async () => (await window.wangcai.request('terminal-agent', 'config')).workspaces.at(-1).sessionId);
-    await page.evaluate((id) => window.wangcai.request('terminal-agent', 'pty', { op: 'input', sessionId: id, params: { data: 'exit\r' } }), sessionId);
+    await run(page, 'exit');
     const restart = page.getByRole('button', { name: '重新打开终端', exact: true });
     await restart.waitFor();
     await restart.click();
@@ -206,8 +211,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await toggle.click();
     assert.equal(await picker.isVisible(), true);
     assert.deepEqual(errors, []);
-    const ratios = await page.evaluate(() => JSON.parse(localStorage.getItem('sidebar-ratios')));
-    const windowWidth = await page.evaluate(() => innerWidth);
+    const beforeReload = await measure();
     await desktop.close(); desktop = undefined;
     desktop = await launchApp(home, env);
     page = await desktop.firstWindow();
@@ -219,9 +223,9 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await left.waitFor();
     await right.waitFor();
     const inner = await page.evaluate(() => innerWidth);
-    assert.ok(Math.abs(inner - windowWidth) < 2);
-    assert.ok(Math.abs((await left.boundingBox()).width - ratios.left * inner) < 1);
-    assert.ok(Math.abs((await right.boundingBox()).width - ratios.right * inner) < 1);
+    assert.ok(Math.abs(inner - beforeReload.inner) < 2);
+    assert.ok(Math.abs((await left.boundingBox()).width - beforeReload.left * inner / beforeReload.inner) < 1);
+    assert.ok(Math.abs((await right.boundingBox()).width - beforeReload.right * inner / beforeReload.inner) < 1);
   } finally {
     await desktop?.close();
     try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}

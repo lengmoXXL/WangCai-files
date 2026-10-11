@@ -1,8 +1,9 @@
+import { posix } from 'node:path';
 import type { MachineConnection } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { imageMime, type FileClick } from './shared';
 
-// Which fields this plugin takes from init.ts, and the default each one falls back to.
+// Fields this plugin takes from init.ts.
 export const config = {
   font: {
     family: { type: 'string', default: '"DejaVuSansM Nerd Font Mono", monospace' },
@@ -14,7 +15,7 @@ export const config = {
 export function activate(context: MainContext) {
   const pending = new Set<AbortController>();
   const connections = new Set<MachineConnection>();
-  const handlers = ['read', 'list'].map((method) => context.ui.handle(method, async ({ machine, path, sessionId }: { machine: FileClick['machine']; path?: string; sessionId?: string }) => {
+  const handlers = ['read', 'list', 'resolve'].map((method) => context.ui.handle(method, async ({ machine, path, sessionId, base }: { machine: FileClick['machine']; path?: string; sessionId?: string; base?: string }) => {
     const controller = new AbortController();
     pending.add(controller);
     let connection: MachineConnection | undefined;
@@ -22,6 +23,12 @@ export function activate(context: MainContext) {
       connection = await context.connect(machine, controller.signal);
       controller.signal.throwIfAborted();
       connections.add(connection);
+      if (method === 'resolve') {
+        const target = path === undefined ? await connection.pty.cwd(sessionId!) : posix.resolve(base!, path);
+        const stat = await connection.fs.stat(target);
+        if (!stat) throw new Error(`路径不存在: ${target}`);
+        return { type: stat.isDirectory ? 'directory' : 'file', machine, path: target };
+      }
       if (method === 'list') {
         const directory = path ?? await connection.pty.cwd(sessionId!);
         const entries = await connection.fs.readDirectory(directory);
