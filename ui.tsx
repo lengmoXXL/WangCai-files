@@ -238,7 +238,7 @@ function editorTheme(theme: Theme): monaco.editor.IStandaloneThemeData {
       { token: 'type', foreground: theme.cyan.slice(1) },
       { token: 'function', foreground: theme.blue.slice(1) },
       { token: 'constant', foreground: theme.brightMagenta.slice(1) },
-      { token: 'delimiter', foreground: theme.brightBlack.slice(1) },
+      { token: 'delimiter', foreground: theme.foreground.slice(1) },
     ],
     colors: {
       'editor.background': theme.background,
