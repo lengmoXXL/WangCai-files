@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -76,6 +76,22 @@ function ModeMenu({ modes, mode, select }: { modes: Mode[]; mode: Mode; select: 
   </div>;
 }
 
+// Frontmatter would otherwise render as a thematic break plus a setext heading.
+const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+
+function splitFrontmatter(text: string): { fields: [string, string][]; body: string } {
+  const match = frontmatter.exec(text);
+  if (!match) return { fields: [], body: text };
+  const fields: [string, string][] = [];
+  for (const line of match[1].split('\n')) {
+    const separator = line.indexOf(':');
+    if (separator < 1 || /^\s/.test(line)) continue;
+    fields.push([line.slice(0, separator).trim(), line.slice(separator + 1).trim()]);
+  }
+  if (!fields.length) return { fields, body: text };
+  return { fields, body: text.slice(match[0].length) };
+}
+
 function Preview({ file, text, mode }: { file: FileClick; text: string; mode: Mode }) {
   const element = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -105,10 +121,18 @@ function Preview({ file, text, mode }: { file: FileClick; text: string; mode: Mo
     editor.revealPositionInCenter(position);
     return () => editor.dispose();
   }, [file, text, mode]);
-  if (mode === 'markdown') return <article className="markdown-preview"><Markdown remarkPlugins={[remarkGfm]} skipHtml components={{
-    a: ({ children }) => <span>{children}</span>,
-    img: ({ alt }) => <span>{alt}</span>,
-  }}>{text}</Markdown></article>;
+  if (mode === 'markdown') {
+    const { fields, body } = splitFrontmatter(text);
+    return <article className="markdown-preview">
+      {fields.length > 0 && <dl className="markdown-meta">
+        {fields.map(([key, value], index) => <Fragment key={index}><dt>{key}</dt><dd>{value}</dd></Fragment>)}
+      </dl>}
+      <Markdown remarkPlugins={[remarkGfm]} skipHtml components={{
+        a: ({ children }) => <span>{children}</span>,
+        img: ({ alt }) => <span>{alt}</span>,
+      }}>{body}</Markdown>
+    </article>;
+  }
   if (mode === 'html') return <iframe className="html-frame" ref={frame} title="HTML 预览" sandbox="allow-scripts" src={preview.url} />;
   return <div className="code-preview" ref={element} />;
 }

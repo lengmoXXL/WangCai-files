@@ -24,7 +24,7 @@ test('view picker browses current terminal directory; file links preview code, M
     const json = join(home, 'settings.json');
     writeFileSync(json, '{"ready":true}');
     writeFileSync(code, 'const first = 1;\nconst second = "CODE_PREVIEW";\n');
-    writeFileSync(markdown, '# Markdown preview\n\n**Rendered content**\n\n| Key | Value |\n| --- | --- |\n| a | b |\n\n```\n' + 'wide code block '.repeat(80) + '\n```\n\n<script>window.previewScriptRan = true</script>');
+    writeFileSync(markdown, '---\nname: sample-skill\ndescription: A frontmatter description that is long enough to wrap inside the metadata panel\nallowed-tools: Read, Grep\nhomepage: https://example.com/sample-skill\n---\n\n# Markdown preview\n\n**Rendered content**\n\n| Key | Value |\n| --- | --- |\n| a | b |\n\n```\n' + 'wide code block '.repeat(80) + '\n```\n\n<script>window.previewScriptRan = true</script>');
     writeFileSync(html, '<!doctype html>\n<!-- HTML_SOURCE -->\n<h1 id="heading">Rendered page</h1>\n<script>document.getElementById("heading").dataset.scripted = "yes"</script>\n');
     writeFileSync(binary, Buffer.from([0, 1, 255, 2]));
     writeFileSync(image, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'));
@@ -163,6 +163,10 @@ test('view picker browses current terminal directory; file links preview code, M
     await page.getByRole('heading', { name: 'Markdown preview' }).waitFor();
     assert.equal(await page.locator('.markdown-preview strong').innerText(), 'Rendered content');
     assert.equal(await page.locator('.markdown-preview table').count(), 1);
+    assert.deepEqual(await page.locator('.markdown-meta dt').allInnerTexts(), ['name', 'description', 'allowed-tools', 'homepage']);
+    assert.equal(await page.locator('.markdown-meta dd').first().innerText(), 'sample-skill');
+    assert.equal(await page.locator('.markdown-meta dd').last().innerText(), 'https://example.com/sample-skill');
+    assert.equal(await page.locator('.markdown-preview hr, .markdown-preview h2').count(), 0);
     assert.equal(await page.evaluate(() => window.previewScriptRan), undefined);
     const markdownPanel = page.getByRole('tabpanel', { name: '文件' });
     assert.equal(await markdownPanel.locator('.preview-path').inputValue(), markdown);

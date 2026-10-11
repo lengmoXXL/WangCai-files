@@ -9,6 +9,9 @@
 .markdown-preview table { border-collapse: collapse; }
 .markdown-preview th, .markdown-preview td { border: 1px solid var(--wc-border); padding: 4px 8px; }
 .markdown-preview blockquote { margin-left: 0; padding-left: 12px; border-left: 2px solid var(--wc-muted); color: var(--wc-muted); }
+.markdown-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0 0 16px; padding: 8px 12px; font-size: 12px; line-height: 1.5; background: var(--wc-overlay); border: 1px solid var(--wc-border); border-radius: 4px; }
+.markdown-meta dt { color: var(--wc-muted); }
+.markdown-meta dd { margin: 0; }
 .html-frame { flex: 1; min-height: 0; border: 0; }
 .preview-header { flex-shrink: 0; display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 6px; border-bottom: 1px solid var(--wc-border); }
 .preview-arrow { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 22px; padding: 3px; color: var(--wc-muted); background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
