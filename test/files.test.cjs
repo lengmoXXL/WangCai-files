@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync } = require('node:fs');
+const { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, statSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -358,6 +358,125 @@ test('view picker browses current terminal directory; file links preview code, M
   } finally {
     await desktop?.close();
     await devServer?.close();
+    try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('navigation history recovers its position and follows workspace tab ownership', { timeout: 180000 }, async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-files-recover-')));
+  const env = testEnv(home);
+  let desktop;
+  try {
+    writeInit(home, { workspaces: ['terminal-agent'], tabs: ['files'] });
+    const code = join(home, 'first.ts');
+    const middle = join(home, 'middle.md');
+    const latest = join(home, 'latest.md');
+    writeFileSync(code, 'const first = 1;\nconst recovered = true;\n');
+    writeFileSync(middle, '# Middle preview');
+    writeFileSync(latest, '# Latest preview');
+    const machine = { id: 'local', name: '本机' };
+    const first = { type: 'file', machine, path: code, line: 2, column: 3 };
+    const second = { type: 'file', machine, path: middle };
+    const third = { type: 'file', machine, path: latest };
+    desktop = await launchApp(home, env);
+    let page = await desktop.firstWindow();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.locator('#view-menu').getByRole('button', { name: '文件', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
+    await page.evaluate(file => window.wangcai.publish('onclick', file), first);
+    await page.locator('.monaco-editor .view-lines').filter({ hasText: 'recovered' }).waitFor();
+    await page.evaluate(file => window.wangcai.publish('onclick', file), second);
+    await page.getByRole('heading', { name: 'Middle preview' }).waitFor();
+    await page.evaluate(file => window.wangcai.publish('onclick', file), third);
+    await page.getByRole('heading', { name: 'Latest preview' }).waitFor();
+    await page.getByRole('button', { name: '后退', exact: true }).click();
+    await page.getByRole('heading', { name: 'Middle preview' }).waitFor();
+    assert.deepEqual((await page.evaluate(() => window.wangcai.request('files', 'history')))[''], { entries: [first, second, third], index: 1 });
+    await desktop.close(); desktop = undefined;
+    desktop = await launchApp(home, env);
+    page = await desktop.firstWindow();
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.getByRole('heading', { name: 'Middle preview' }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '后退', exact: true }).isDisabled(), false);
+    assert.equal(await page.getByRole('button', { name: '前进', exact: true }).isDisabled(), false);
+    await createWorkspace(page);
+    const firstWorkspace = await page.evaluate(async () => (await window.wangcai.request('terminal-agent', 'config')).workspaces[0].id);
+    await page.evaluate(file => window.wangcai.publish('onclick', file), second);
+    await page.getByRole('heading', { name: 'Middle preview' }).waitFor();
+    await page.getByRole('textbox', { name: '路径', exact: true }).fill(home);
+    await page.getByRole('textbox', { name: '路径', exact: true }).press('Enter');
+    await page.getByRole('navigation', { name: '当前目录文件' }).getByRole('button', { name: 'first.ts', exact: true }).waitFor();
+    await page.getByRole('button', { name: '后退', exact: true }).click();
+    await page.getByRole('heading', { name: 'Middle preview' }).waitFor();
+    await createWorkspace(page);
+    const secondWorkspace = await page.evaluate(async () => (await window.wangcai.request('terminal-agent', 'config')).workspaces[1].id);
+    await page.evaluate(file => window.wangcai.publish('onclick', file), third);
+    await page.getByRole('heading', { name: 'Latest preview' }).waitFor();
+    const stored = await page.evaluate(() => window.wangcai.request('files', 'history'));
+    assert.equal('' in stored, false);
+    assert.deepEqual(stored[firstWorkspace], { entries: [first, second, { type: 'directory', machine, path: home }], index: 1 });
+    assert.deepEqual(stored[secondWorkspace], { entries: [third], index: 0 });
+    await desktop.close(); desktop = undefined;
+    desktop = await launchApp(home, env);
+    page = await desktop.firstWindow();
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.waitForFunction(() => document.querySelectorAll('.sidebar-panel[data-plugin=files]').length === 2);
+    assert.deepEqual(await page.evaluate(() => window.wangcai.request('files', 'history')), stored);
+    const workspaces = page.getByRole('tablist', { name: '工作区' }).getByRole('tab');
+    await workspaces.first().click();
+    const fileTabs = page.getByRole('tablist', { name: '侧栏标签页' }).getByRole('tab', { name: '文件', exact: true });
+    assert.equal(await fileTabs.count(), 1);
+    await fileTabs.first().click();
+    await page.getByRole('heading', { name: 'Middle preview' }).waitFor();
+    const address = page.getByRole('textbox', { name: '路径', exact: true });
+    const back = page.getByRole('button', { name: '后退', exact: true });
+    const forward = page.getByRole('button', { name: '前进', exact: true });
+    assert.equal(await address.inputValue(), middle);
+    assert.equal(await back.isDisabled(), false);
+    assert.equal(await forward.isDisabled(), false);
+    const historyPath = join(home, '.local/share/wangcai/data/files/history.json');
+    const modified = statSync(historyPath, { bigint: true }).mtimeNs;
+    await page.getByRole('button', { name: '刷新', exact: true }).click();
+    await page.getByRole('heading', { name: 'Middle preview' }).waitFor();
+    await fileTabs.first().click();
+    await page.evaluate(() => window.wangcai.request('files', 'history'));
+    assert.equal(statSync(historyPath, { bigint: true }).mtimeNs, modified);
+    await forward.click();
+    await page.getByRole('navigation', { name: '当前目录文件' }).getByRole('button', { name: 'first.ts', exact: true }).waitFor();
+    await back.click();
+    await page.getByRole('heading', { name: 'Middle preview' }).waitFor();
+    await back.click();
+    await page.locator('.monaco-editor .view-lines').filter({ hasText: 'recovered' }).waitFor();
+    assert.equal(await address.inputValue(), code);
+    assert.equal(await back.isDisabled(), true);
+    await address.fill(home);
+    await address.press('Enter');
+    await page.getByRole('navigation', { name: '当前目录文件' }).getByRole('button', { name: 'first.ts', exact: true }).waitFor();
+    assert.equal(await forward.isDisabled(), true);
+    assert.deepEqual((await page.evaluate(() => window.wangcai.request('files', 'history')))[firstWorkspace], {
+      entries: [first, { type: 'directory', machine, path: home }], index: 1,
+    });
+    await workspaces.last().click();
+    await fileTabs.last().click();
+    await page.getByRole('heading', { name: 'Latest preview' }).waitFor();
+    assert.equal(await back.isDisabled(), true);
+    assert.equal(await forward.isDisabled(), true);
+    await page.locator('.sidebar-tab:visible .close-tab').last().click();
+    const remaining = await page.evaluate(() => window.wangcai.request('files', 'history'));
+    assert.equal(secondWorkspace in remaining, false);
+    assert.equal(firstWorkspace in remaining, true);
+    await page.getByRole('button', { name: '新建侧栏标签页' }).click();
+    await page.locator('#view-menu').getByRole('button', { name: '文件', exact: true }).click();
+    await page.getByRole('navigation', { name: '当前目录文件' }).getByRole('button', { name: 'first.ts', exact: true }).waitFor();
+    assert.equal(await back.isDisabled(), true);
+    assert.equal(await forward.isDisabled(), true);
+    assert.deepEqual(errors, []);
+  } finally {
+    await desktop?.close();
     try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}
     rmSync(home, { recursive: true, force: true });
   }

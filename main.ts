@@ -1,7 +1,8 @@
-import { posix } from 'node:path';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { join, posix } from 'node:path';
 import type { MachineConnection } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
-import { imageMime, type FileClick } from './shared';
+import { imageMime, type FileClick, type History } from './shared';
 
 // Fields this plugin takes from init.ts.
 export const config = {
@@ -49,6 +50,14 @@ export function activate(context: MainContext) {
       pending.delete(controller);
     }
   }));
+  const historyPath = join(context.host.dataDirectory, 'history.json');
+  handlers.push(
+    context.ui.handle('history', () => existsSync(historyPath) ? JSON.parse(readFileSync(historyPath, 'utf8')) : {}),
+    context.ui.handle('save-history', (history: Record<string, History>) => {
+      writeFileSync(`${historyPath}.tmp`, JSON.stringify(history, null, 2));
+      renameSync(`${historyPath}.tmp`, historyPath);
+    }),
+  );
   return () => {
     for (const remove of handlers) remove();
     for (const controller of pending) controller.abort();

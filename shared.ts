@@ -1,5 +1,6 @@
-import type { Profile } from '@lengmoxxl/sdk';
+import type { FileClick, Profile } from '@lengmoxxl/sdk';
 export type { FileClick } from '@lengmoxxl/sdk';
+export type History = { entries: FileClick[]; index: number };
 
 // The config this plugin accepts: main.ts declares a schema for the same fields.
 export type Font = { family: string; size: number; lineHeight?: number };

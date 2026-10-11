@@ -9,15 +9,14 @@ import { jsonDefaults } from 'monaco-editor/languages/features/json/register.js'
 import 'monaco-editor/editor/contrib/find/browser/findController.js';
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
-import { imageMime, type FileClick, type Font, type Settings } from './shared';
+import { imageMime, type FileClick, type Font, type History, type Settings } from './shared';
 import './style.css';
 
 export const title = '文件';
 let activeWorkspaceId: string | undefined;
 let preview: { url: string; message: string };
 let font: Font;
-type History = { entries: FileClick[]; index: number };
-const histories = new Map<string | undefined, History>();
+const histories = new Map<string, History>();
 jsonDefaults.setModeConfiguration({ tokens: true });
 
 type NavigationProps = { context: UiContext; file: FileClick; navigate: (file: FileClick) => void; refresh: () => void; back?: () => void; forward?: () => void };
@@ -203,24 +202,37 @@ export function open(context: UiContext, record?: TabRecord) {
 }
 
 function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
-  const history = histories.get(workspaceId) ?? { entries: [], index: -1 };
-  histories.set(workspaceId, history);
+  const key = workspaceId ?? '';
+  const history = histories.get(key) ?? { entries: [], index: -1 };
+  histories.set(key, history);
   const push = (file: FileClick) => {
     const current = history.entries[history.index];
     if (!current || current.machine.id !== file.machine.id || current.machine.host !== file.machine.host || current.type !== file.type || current.path !== file.path || current.line !== file.line || current.column !== file.column) {
       history.entries = [...history.entries.slice(0, history.index + 1), file];
       history.index++;
+      void context.ui.request('save-history', Object.fromEntries(histories));
     } else history.entries[history.index] = file;
   };
   if (file) push(file);
-  context.host.tabs({ id: 'directory', title: '文件', workspaceId, onClose: () => histories.delete(workspaceId), mount(container: HTMLElement) {
+  context.host.tabs({ id: 'directory', title: '文件', workspaceId, onClose() {
+    for (const [key, value] of histories) if (value === history) histories.delete(key);
+    void context.ui.request('save-history', Object.fromEntries(histories));
+  }, mount(container: HTMLElement) {
     container.style.fontFamily = font.family;
     const root = createRoot(container);
     const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} file={history.entries[history.index]}
       navigate={(file) => { push(file); render(); }}
       refresh={() => { history.entries[history.index] = { ...history.entries[history.index] }; render(); }}
-      back={history.index > 0 ? () => { history.index--; render(); } : undefined}
-      forward={history.index < history.entries.length - 1 ? () => { history.index++; render(); } : undefined} />);
+      back={history.index > 0 ? () => {
+        history.index--;
+        void context.ui.request('save-history', Object.fromEntries(histories));
+        render();
+      } : undefined}
+      forward={history.index < history.entries.length - 1 ? () => {
+        history.index++;
+        void context.ui.request('save-history', Object.fromEntries(histories));
+        render();
+      } : undefined} />);
     return { onSelect: render, dispose: () => root.unmount() };
   } });
 }
@@ -261,6 +273,7 @@ export async function mount(_container: HTMLElement, context: UiContext) {
   font = profile.font;
   preview = context.host.preview;
   monaco.editor.defineTheme('wangcai', editorTheme(profile.theme));
+  for (const [key, history] of Object.entries(await context.ui.request<Record<string, History>>('history'))) histories.set(key, history);
   const response = await fetch(new URL('./ui.worker.js', import.meta.url));
   if (!response.ok) throw new Error('Cannot load file preview worker');
   const workerURL = URL.createObjectURL(new Blob([await response.text()], { type: 'text/javascript' }));
@@ -270,7 +283,16 @@ export async function mount(_container: HTMLElement, context: UiContext) {
     workers.add(worker);
     return worker;
   } };
-  const offActive = context.global.subscribe<WorkspaceActive | null>('workspace:active', (value) => { activeWorkspaceId = value?.workspaceId; });
+  const offActive = context.global.subscribe<WorkspaceActive | null>('workspace:active', (value) => {
+    activeWorkspaceId = value?.workspaceId;
+    // The shell moves unscoped tabs into the first selected workspace.
+    const unassigned = histories.get('');
+    if (activeWorkspaceId !== undefined && unassigned) {
+      histories.delete('');
+      histories.set(activeWorkspaceId, unassigned);
+      void context.ui.request('save-history', Object.fromEntries(histories));
+    }
+  });
   void context.global.publish('workspace:query', null);
   const off = context.global.subscribe<FileClick>('onclick', (file) => openTab(context, activeWorkspaceId, file));
   return () => {

@@ -8,6 +8,7 @@ test('address resolution uses the requested machine and directory, and releases 
   const paths = [];
   let disconnected = 0;
   const dispose = activate({
+    host: { dataDirectory: __dirname },
     ui: { handle(method, handler) { handlers.set(method, handler); return () => handlers.delete(method); } },
     async connect(target, signal) {
       assert.equal(target, machine);
