@@ -43,6 +43,6 @@ exports.run = async (page, line) => {
 
 exports.createWorkspace = async (page) => {
   await page.locator('.workspace-header').click({ button: 'right' });
-  await page.locator('#workspace-row-menu').getByRole('menuitem', { name: '本机', exact: true }).click();
+  await page.locator('#workspace-row-menu').getByRole('menuitem', { name: '新建 本机', exact: true }).click();
   await page.waitForFunction(() => (document.querySelector('.terminal-pane.active .xterm-rows')?.textContent ?? '').trim().length > 0);
 };
