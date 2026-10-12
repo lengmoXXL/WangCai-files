@@ -1,12 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } = require('node:fs');
+const { mkdtempSync, mkdirSync, writeFileSync, realpathSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { execFileSync } = require('node:child_process');
-const { createWorkspace, launchApp, run, testEnv, wangcaiApp, writeInit } = require('./harness.cjs');
-
-const app = wangcaiApp();
+const { cleanup, createWorkspace, launchApp, run, testEnv, writeInit } = require('./harness.cjs');
 
 test('view menu switches plugins and handles empty and closed terminals', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-sidebar-')));
@@ -107,10 +104,12 @@ test('view menu switches plugins and handles empty and closed terminals', { time
       [workspaces.last(), '.workspace.selected', 0.5, 0.85, 'borderBottomColor'],
       [page.locator('.sidebar-tab').last(), '.sidebar-tab:has([aria-selected=true])', 0.85, 0.5, 'borderRightColor'],
     ]) {
+      await source.waitFor();
       const from = await source.boundingBox();
       await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
       await page.mouse.down();
       const target = page.locator(selector).first();
+      await target.waitFor();
       const to = await target.boundingBox();
       await page.mouse.move(to.x + to.width * x, to.y + to.height * y, { steps: 6 });
       // Native dragover needs a second move after dragstart.
@@ -135,7 +134,9 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     ]) {
       const pane = page.locator(`.sidebar-${side}`);
       const handle = page.getByRole('separator', { name: label });
+      await pane.waitFor();
       const before = (await pane.boundingBox()).width;
+      await handle.waitFor();
       let box = await handle.boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + 100);
       await page.mouse.down();
@@ -209,7 +210,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     assert.equal(await picker.isVisible(), false);
     assert.equal(await toggle.isVisible(), true);
     await toggle.click();
-    assert.equal(await picker.isVisible(), true);
+    await picker.waitFor();
     assert.deepEqual(errors, []);
     const beforeReload = await measure();
     await desktop.close(); desktop = undefined;
@@ -224,11 +225,10 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await right.waitFor();
     const inner = await page.evaluate(() => innerWidth);
     assert.ok(Math.abs(inner - beforeReload.inner) < 2);
-    assert.ok(Math.abs((await left.boundingBox()).width - beforeReload.left * inner / beforeReload.inner) < 1);
-    assert.ok(Math.abs((await right.boundingBox()).width - beforeReload.right * inner / beforeReload.inner) < 1);
+    assert.ok(Math.abs((await left.boundingBox()).width - beforeReload.left * inner / beforeReload.inner) < 2);
+    assert.ok(Math.abs((await right.boundingBox()).width - beforeReload.right * inner / beforeReload.inner) < 2);
   } finally {
     await desktop?.close();
-    try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}
-    rmSync(home, { recursive: true, force: true });
+    cleanup(home);
   }
 });

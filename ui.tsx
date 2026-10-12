@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -7,8 +7,14 @@ import 'monaco-editor/basic-languages/monaco.contribution.js';
 import 'monaco-editor/languages/features/json/jsonMode.js';
 import { jsonDefaults } from 'monaco-editor/languages/features/json/register.js';
 import 'monaco-editor/editor/contrib/find/browser/findController.js';
+// What a language server answers through: hovering, going to a definition, and the symbols of a file.
+import 'monaco-editor/editor/contrib/hover/browser/hoverContribution.js';
+import 'monaco-editor/editor/contrib/gotoSymbol/browser/goToCommands.js';
+import 'monaco-editor/editor/contrib/gotoSymbol/browser/link/goToDefinitionAtPosition.js';
+import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbolQuickAccess.js';
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
+import { LanguageServices } from './lsp';
 import { imageMime, type FileClick, type Font, type History, type Settings } from './shared';
 import './style.css';
 
@@ -17,6 +23,8 @@ let activeWorkspaceId: string | undefined;
 let preview: { url: string; message: string };
 let font: Font;
 const histories = new Map<string, History>();
+// The window's language servers, which mount() starts and every tab shares.
+let services: LanguageServices | undefined;
 jsonDefaults.setModeConfiguration({ tokens: true });
 
 type NavigationProps = { context: UiContext; file: FileClick; navigate: (file: FileClick) => void; refresh: () => void; back?: () => void; forward?: () => void };
@@ -92,7 +100,32 @@ function splitFrontmatter(text: string): { fields: [string, string][]; body: str
   return { fields, body: text.slice(match[0].length) };
 }
 
-function Preview({ file, text, mode }: { file: FileClick; text: string; mode: Mode }) {
+const stateLabels = { connecting: '正在启动', open: '运行中', closed: '已退出' };
+
+// The dot in the toolbar for this file's language server: hovering it names the server and how it is doing, and
+// clicking it restarts the server behind the file.
+function LspStatus({ model }: { model?: monaco.editor.ITextModel }) {
+  const [, rerender] = useReducer((count: number) => count + 1, 0);
+  const [hover, setHover] = useState(false);
+  useEffect(() => services?.subscribe(rerender), []);
+  const status = model && services?.status(model);
+  if (!model || !status) return null;
+  return <div className="preview-lsp-wrap" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+    <button className={`preview-lsp ${status.state}`} type="button" aria-label={`语言服务：${status.server}`} onClick={() => void services?.restart(model)}>
+      <span className="preview-lsp-dot" />
+    </button>
+    {hover && <div className="preview-lsp-detail" role="tooltip">
+      <span className="preview-lsp-name">{status.server}</span>
+      <span>{stateLabels[status.state]}</span>
+      <span>{status.root}</span>
+      {status.error && <span>{status.error}</span>}
+      {status.log && <span>{status.log}</span>}
+      <span>点击重启这个服务</span>
+    </div>}
+  </div>;
+}
+
+function Preview({ file, text, mode, navigate, notify, onModel }: { file: FileClick; text: string; mode: Mode; navigate: (file: FileClick) => void; notify: (reason: string) => void; onModel: (model?: monaco.editor.ITextModel) => void }) {
   const element = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   // The preview document asks for its content as soon as it loads, so the listener has to be in place first.
@@ -110,8 +143,13 @@ function Preview({ file, text, mode }: { file: FileClick; text: string; mode: Mo
     const size = font.size;
     const name = file.path.split('/').pop()!;
     const language = monaco.languages.getLanguages().find((item) => item.filenames?.includes(name) || item.extensions?.some((extension) => name.endsWith(extension)))?.id ?? 'plaintext';
+    // A language server knows a file only by its own URI, and monaco keeps one model per URI, so a path this
+    // window already shows from another machine is previewed as a file no server can open.
+    const uri = monaco.Uri.file(file.path);
+    const model = monaco.editor.getModel(uri) ? undefined : monaco.editor.createModel(text, language, uri);
+    onModel(model);
     const editor = monaco.editor.create(element.current!, {
-      value: text, language, theme: 'wangcai', readOnly: true, domReadOnly: true,
+      ...(model ? { model } : { value: text, language }), theme: 'wangcai', readOnly: true, domReadOnly: true,
       automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false,
       fontSize: size, lineHeight: font.lineHeight ? Math.round(size * font.lineHeight) : 0, fontFamily: font.family, lineNumbersMinChars: 3, renderLineHighlight: 'none',
       ariaLabel: '代码预览', contextmenu: false,
@@ -119,7 +157,9 @@ function Preview({ file, text, mode }: { file: FileClick; text: string; mode: Mo
     const position = { lineNumber: file.line ?? 1, column: file.column ?? 1 };
     editor.setPosition(position);
     editor.revealPositionInCenter(position);
-    return () => editor.dispose();
+    let alive = true;
+    if (model) void services?.open({ machine: file.machine, path: file.path, language, model, navigate, notify: (reason) => { if (alive) notify(reason); } });
+    return () => { alive = false; editor.dispose(); model?.dispose(); onModel(undefined); };
   }, [file, text, mode]);
   if (mode === 'markdown') {
     const { fields, body } = splitFrontmatter(text);
@@ -141,9 +181,10 @@ function FileView(props: NavigationProps) {
   const { context, file } = props;
   const [text, setText] = useState<string>();
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   useEffect(() => {
     let alive = true;
-    setText(undefined); setError('');
+    setText(undefined); setError(''); setNotice('');
     void context.ui.request<string>('read', file).then((text) => { if (alive) setText(text); })
       .catch((error: Error) => { if (alive) setError(error.message); });
     return () => { alive = false; };
@@ -153,14 +194,25 @@ function FileView(props: NavigationProps) {
   const image = imageMime(file.path);
   const modes: Mode[] = image ? [] : ['text', ...(markdown ? ['markdown' as const] : []), ...(html ? ['html' as const] : [])];
   const [mode, setMode] = useState<Mode>(html ? 'html' : markdown ? 'markdown' : 'text');
+  const [model, setModel] = useState<monaco.editor.ITextModel>();
+  useEffect(() => {
+    if (!model) return;
+    // The notice describes a server that is not running, so it goes once this file's server is up again.
+    return services?.subscribe(() => { if (services?.status(model)?.state === 'open') setNotice(''); });
+  }, [model]);
   return <section className="file-preview" aria-label="文件预览">
     <Navigation {...props}>
       {modes.length > 1 && <ModeMenu modes={modes} mode={mode} select={setMode} />}
+      <LspStatus model={model} />
     </Navigation>
+    {notice && <div className="preview-notice" role="alert">
+      <span>{notice}</span>
+      <button type="button" aria-label="关闭语言服务提示" title="关闭" onClick={() => setNotice('')}>×</button>
+    </div>}
     {error ? <div className="file-message" role="alert">{error}</div>
       : text === undefined ? <div className="file-message">正在读取…</div>
       : image ? <div className="image-preview"><img src={text} alt={file.path} /></div>
-      : <Preview file={file} text={text} mode={mode} />}
+      : <Preview file={file} text={text} mode={mode} onModel={setModel} navigate={props.navigate} notify={setNotice} />}
   </section>;
 }
 
@@ -319,7 +371,24 @@ export async function mount(_container: HTMLElement, context: UiContext) {
   });
   void context.global.publish('workspace:query', null);
   const off = context.global.subscribe<FileClick>('onclick', (file) => openTab(context, activeWorkspaceId, file));
+  services = new LanguageServices(context);
+  const definition = monaco.languages.registerDefinitionProvider({ scheme: 'file' }, {
+    provideDefinition: (model, position) => services?.for(model)?.definition(model, position) ?? null,
+  });
+  // monaco opens only the models the window already has, so a jump into another file lands here.
+  const opener = monaco.editor.registerEditorOpener({
+    openCodeEditor: (source, resource, selection) => {
+      const at = !selection ? undefined
+        : 'lineNumber' in selection ? new monaco.Position(selection.lineNumber, selection.column)
+        : new monaco.Position(selection.startLineNumber, selection.startColumn);
+      return services?.openResource(source.getModel(), resource, at) ?? false;
+    },
+  });
   return () => {
+    opener.dispose();
+    definition.dispose();
+    services?.dispose();
+    services = undefined;
     offActive();
     off();
     histories.clear();

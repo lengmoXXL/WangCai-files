@@ -12,7 +12,12 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "monaco-lsp-client": [
+        "./node_modules/monaco-editor/esm/external/monaco-lsp-client/out/index"
+      ]
+    }
   },
   "include": [
     "*.ts",

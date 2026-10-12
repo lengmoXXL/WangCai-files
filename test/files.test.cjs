@@ -1,11 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, statSync } = require('node:fs');
+const { mkdtempSync, writeFileSync, mkdirSync, realpathSync, statSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { execFileSync } = require('node:child_process');
-const { createWorkspace, launchApp, run, testEnv, wangcaiApp, writeInit } = require('./harness.cjs');
+const { cleanup, createWorkspace, launchApp, run, testEnv, wangcaiApp, writeInit } = require('./harness.cjs');
 
 const app = wangcaiApp();
 
@@ -362,8 +361,7 @@ test('view picker browses current terminal directory; file links preview code, M
   } finally {
     await desktop?.close();
     await devServer?.close();
-    try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}
-    rmSync(home, { recursive: true, force: true });
+    cleanup(home);
   }
 });
 
@@ -481,7 +479,6 @@ test('navigation history recovers its position and follows workspace tab ownersh
     assert.deepEqual(errors, []);
   } finally {
     await desktop?.close();
-    try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}
-    rmSync(home, { recursive: true, force: true });
+    cleanup(home);
   }
 });

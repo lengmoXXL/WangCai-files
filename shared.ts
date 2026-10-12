@@ -2,9 +2,17 @@ import type { FileClick, Profile } from '@lengmoxxl/sdk';
 export type { FileClick } from '@lengmoxxl/sdk';
 export type History = { entries: FileClick[]; index: number };
 
+// The language service main.ts drives for a file: what opening one gives back, and what it publishes while
+// a server runs. Bytes cross the channel as base64, since every payload here is JSON.
+export type LspSession = { session: string; server: string; root: string };
+export type LspData = { session: string; data: string };
+export type LspLog = { session: string; text: string };
+export type LspExit = { session: string; code?: number };
+
 // The config this plugin accepts: main.ts declares a schema for the same fields.
 export type Font = { family: string; size: number; lineHeight?: number };
-export type Settings = Profile & { font: Font };
+type ServerOverride = { command?: string[]; markers?: string[] };
+export type Settings = Profile & { font: Font; lsp?: Record<string, ServerOverride | false> };
 
 // Chromium renders these straight from a data URL.
 const imageTypes: Record<string, string> = {
