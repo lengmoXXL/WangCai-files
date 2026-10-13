@@ -3,10 +3,10 @@
 .code-preview { flex: 1; min-height: 0; }
 .image-preview { flex: 1; min-height: 0; display: grid; place-items: center; padding: 8px; }
 .image-preview img { max-width: 100%; max-height: 100%; }
-.markdown-pane { flex: 1; min-height: 0; display: flex; }
-.markdown-preview { flex: none; overflow: auto; padding: 8px 20px 24px; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.markdown-pane { flex: 1; min-height: 0; display: flex; overflow: auto; }
+.markdown-preview { flex: none; align-self: flex-start; padding: 8px 20px 24px; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 /* The page's divider carries a hairline before the pointer arrives, so the width reads as draggable. */
-.markdown-divider { flex: none; display: flex; justify-content: center; width: 10px; cursor: col-resize; touch-action: none; }
+.markdown-divider { flex: none; display: flex; justify-content: center; align-self: flex-start; height: 100%; position: sticky; top: 0; width: 10px; cursor: col-resize; touch-action: none; }
 .markdown-divider::before { content: ''; align-self: stretch; width: 2px; margin: 12px 0; border-radius: 2px; background: var(--wc-border); }
 .markdown-divider:hover::before { background: var(--wc-accent); }
 .markdown-preview pre { overflow-x: auto; padding: 12px; background: var(--wc-overlay); }

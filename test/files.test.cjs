@@ -23,7 +23,7 @@ test('view picker browses current terminal directory; file links preview code, M
     const json = join(home, 'settings.json');
     writeFileSync(json, '{"ready":true}');
     writeFileSync(code, 'const first = 1;\nconst second = "CODE_PREVIEW";\n');
-    writeFileSync(markdown, '---\nname: sample-skill\ndescription: A frontmatter description that is long enough to wrap inside the metadata panel\nallowed-tools: Read, Grep\nhomepage: https://example.com/sample-skill\n---\n\n# Markdown preview\n\n**Rendered content**\n\n| Key | Value |\n| --- | --- |\n| a | b |\n\n```\n' + 'wide code block '.repeat(80) + '\n```\n\n<script>window.previewScriptRan = true</script>');
+    writeFileSync(markdown, '---\nname: sample-skill\ndescription: A frontmatter description that is long enough to wrap inside the metadata panel\nallowed-tools: Read, Grep\nhomepage: https://example.com/sample-skill\n---\n\n# Markdown preview\n\n**Rendered content**\n\n| Key | Value |\n| --- | --- |\n| a | b |\n\n```\n' + 'wide code block '.repeat(80) + '\n```\n\n' + 'A body line tall enough for the pane to scroll.\n\n'.repeat(40) + '<script>window.previewScriptRan = true</script>');
     writeFileSync(html, '<!doctype html>\n<!-- HTML_SOURCE -->\n<h1 id="heading">Rendered page</h1>\n<script>document.getElementById("heading").dataset.scripted = "yes"</script>\n');
     writeFileSync(binary, Buffer.from([0, 1, 255, 2]));
     writeFileSync(image, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'));
@@ -205,6 +205,13 @@ test('view picker browses current terminal directory; file links preview code, M
     assert.equal(thumb, 'rgba(121, 121, 121, 0.4)', 'a scrolling panel shows its scrollbar');
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.markdown-preview pre'), '::-webkit-scrollbar-thumb').backgroundColor === 'rgba(0, 0, 0, 0)');
     assert.equal(await page.locator('.markdown-preview pre').evaluate(element => element.scrollWidth > element.clientWidth), true);
+
+    // The pane scrolls rather than the page, so the scrollbar sits at the panel's right edge instead of at the divider.
+    assert.deepEqual(await page.evaluate(() => {
+      const pane = document.querySelector('.markdown-pane');
+      const article = document.querySelector('.markdown-preview');
+      return [pane.scrollHeight > pane.clientHeight, pane.clientWidth < pane.offsetWidth, article.clientWidth === article.offsetWidth];
+    }), [true, true, true]);
     assert.deepEqual(await page.evaluate(async () => {
       const strip = document.querySelector('.sidebar-tabs');
       strip.style.width = '20px';
@@ -236,14 +243,27 @@ test('view picker browses current terminal directory; file links preview code, M
     await page.getByRole('heading', { name: 'Markdown preview' }).waitFor();
     assert.ok(Math.abs((await article.boundingBox()).width - after) < 2, 'a page shown again comes back to the dragged width');
 
-    // The host's own divider can make the pane too narrow for the page's fraction, and then the page narrows to its
-    // minimum width too.
+    // Dragging past the page's minimum width stops the page there.
+    const seam = await markdownPanel.locator('.markdown-divider').boundingBox();
+    await page.mouse.move(seam.x + 1, seam.y + seam.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(seam.x - 400, seam.y + seam.height / 2, { steps: 5 });
+    await page.mouse.up();
+    assert.ok(Math.abs((await article.boundingBox()).width - 240) < 2, 'the page keeps its minimum width');
+
+    // The host's own divider can make the pane too narrow for that width, and then the divider takes its own and the
+    // page keeps the rest.
     const separatorBox = await page.getByRole('separator', { name: '调整右侧栏宽度' }).boundingBox();
     await page.mouse.move(separatorBox.x + separatorBox.width / 2, separatorBox.y + 100);
     await page.mouse.down();
     await page.mouse.move(separatorBox.x + 400, separatorBox.y + 100, { steps: 5 });
     await page.mouse.up();
-    await page.waitForFunction(() => Math.abs(document.querySelector('.markdown-preview').getBoundingClientRect().width - 240) < 2);
+    await page.waitForFunction(() => {
+      const pane = document.querySelector('.markdown-pane');
+      const article = document.querySelector('.markdown-preview');
+      const divider = document.querySelector('.markdown-divider');
+      return Math.abs(article.getBoundingClientRect().width - (pane.clientWidth - divider.offsetWidth)) < 2;
+    });
     const fileTabs = page.getByRole('tablist', { name: '侧栏标签页' });
     await page.getByRole('button', { name: '后退', exact: true }).click();
     await page.locator('.monaco-editor .view-lines').filter({ hasText: 'CODE_PREVIEW' }).waitFor();
