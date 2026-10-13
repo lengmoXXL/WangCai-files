@@ -7,7 +7,7 @@
 .markdown-preview { flex: none; align-self: flex-start; padding: 8px 20px 24px; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 /* The page's divider carries a hairline before the pointer arrives, so the width reads as draggable. */
 .markdown-divider { flex: none; display: flex; justify-content: center; align-self: flex-start; height: 100%; position: sticky; top: 0; width: 10px; cursor: col-resize; touch-action: none; }
-.markdown-divider::before { content: ''; align-self: stretch; width: 2px; margin: 12px 0; border-radius: 2px; background: var(--wc-border); }
+.markdown-divider::before { content: ''; align-self: stretch; width: 1px; background: var(--wc-border); }
 .markdown-divider:hover::before { background: var(--wc-accent); }
 .markdown-preview pre { overflow-x: auto; padding: 12px; background: var(--wc-overlay); }
 .markdown-preview code { font-family: Menlo, monospace; }

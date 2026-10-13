@@ -221,6 +221,12 @@ test('view picker browses current terminal directory; file links preview code, M
       return overflow;
     }), [true, 32, 32]);
 
+    // The seam is a single hairline over the pane's whole height, with no gaps to read as two dividers.
+    assert.deepEqual(await markdownPanel.locator('.markdown-divider').evaluate((element) => {
+      const hairline = getComputedStyle(element, '::before');
+      return [hairline.width, hairline.marginTop, hairline.marginBottom, parseFloat(hairline.height) === element.getBoundingClientRect().height];
+    }), ['1px', '0px', '0px', true]);
+
     // The markdown page is sized by its own divider, and the fraction it was dragged to is remembered.
     const article = markdownPanel.locator('.markdown-preview');
     const dividerBox = await markdownPanel.locator('.markdown-divider').boundingBox();
