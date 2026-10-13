@@ -161,9 +161,44 @@ function Preview({ file, text, mode, navigate, notify, onModel }: { file: FileCl
     if (model) void services?.open({ machine: file.machine, path: file.path, language, model, navigate, notify: (reason) => { if (alive) notify(reason); } });
     return () => { alive = false; editor.dispose(); model?.dispose(); onModel(undefined); };
   }, [file, text, mode]);
-  if (mode === 'markdown') {
-    const { fields, body } = splitFrontmatter(text);
-    return <article className="markdown-preview">
+  if (mode === 'markdown') return <MarkdownPage text={text} />;
+  if (mode === 'html') return <iframe className="html-frame" ref={frame} title="HTML 预览" sandbox="allow-scripts" src={preview.url} />;
+  return <div className="code-preview" ref={element} />;
+}
+
+// The markdown page is sized by its own divider: the width is a fraction of the pane, so a window resize keeps the
+// proportion, and one fraction is shared by every markdown file the window shows.
+function MarkdownPage({ text }: { text: string }) {
+  const pane = useRef<HTMLDivElement>(null);
+  const page = useRef<HTMLDivElement>(null);
+  const divider = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ left: number; width: number } | undefined>(undefined);
+  const painted = useRef(0);
+  const { fields, body } = splitFrontmatter(text);
+  const paint = (ratio: number) => {
+    const width = pane.current!.clientWidth;
+    // A page that reached the pane's right edge would carry its divider out of reach, so the divider keeps its width.
+    const room = width - divider.current!.offsetWidth;
+    // A restored tab that is not the one in front mounts its markdown page while its panel is hidden, so there is no
+    // width to measure yet: the ratio it was left at is all there is to draw.
+    painted.current = room > 0 ? Math.min(room / width, Math.max(240 / width, ratio)) : ratio;
+    page.current!.style.width = `${painted.current * 100}%`;
+  };
+
+  // The page takes the fraction its divider was dragged to, or a readable measure when it was never dragged.
+  useLayoutEffect(() => {
+    const restore = () => {
+      const ratio = Number(localStorage.getItem('markdown-width'));
+      paint(ratio > 0 ? ratio : 0.6);
+    };
+    const observer = new ResizeObserver(restore);
+    observer.observe(pane.current!);
+    restore();
+    return () => observer.disconnect();
+  }, []);
+
+  return <div className="markdown-pane" ref={pane}>
+    <article className="markdown-preview" ref={page}>
       {fields.length > 0 && <dl className="markdown-meta">
         {fields.map(([key, value], index) => <Fragment key={index}><dt>{key}</dt><dd>{value}</dd></Fragment>)}
       </dl>}
@@ -171,10 +206,24 @@ function Preview({ file, text, mode, navigate, notify, onModel }: { file: FileCl
         a: ({ children }) => <span>{children}</span>,
         img: ({ alt }) => <span>{alt}</span>,
       }}>{body}</Markdown>
-    </article>;
-  }
-  if (mode === 'html') return <iframe className="html-frame" ref={frame} title="HTML 预览" sandbox="allow-scripts" src={preview.url} />;
-  return <div className="code-preview" ref={element} />;
+    </article>
+    <div className="markdown-divider" ref={divider} role="separator" aria-label="调整预览宽度" aria-orientation="vertical"
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        drag.current = { left: pane.current!.getBoundingClientRect().left, width: pane.current!.clientWidth };
+      }}
+      onPointerMove={(event) => {
+        const from = drag.current;
+        if (from && event.currentTarget.hasPointerCapture(event.pointerId)) paint((event.clientX - from.left) / from.width);
+      }}
+      onPointerUp={() => {
+        if (!drag.current) return;
+        drag.current = undefined;
+        localStorage.setItem('markdown-width', String(painted.current));
+      }} />
+  </div>;
 }
 
 function FileView(props: NavigationProps) {

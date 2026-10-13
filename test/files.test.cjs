@@ -213,6 +213,37 @@ test('view picker browses current terminal directory; file links preview code, M
       strip.style.width = '';
       return overflow;
     }), [true, 32, 32]);
+
+    // The markdown page is sized by its own divider, and the fraction it was dragged to is remembered.
+    const article = markdownPanel.locator('.markdown-preview');
+    const dividerBox = await markdownPanel.locator('.markdown-divider').boundingBox();
+    // The divider is grabbed at the page's right edge, so the page follows the pointer one to one.
+    const from = dividerBox.x + 1;
+    const step = 60;
+    const before = (await article.boundingBox()).width;
+    await page.mouse.move(from, dividerBox.y + dividerBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(from + step, dividerBox.y + dividerBox.height / 2, { steps: 5 });
+    await page.mouse.up();
+    const after = (await article.boundingBox()).width;
+    assert.ok(Math.abs(after - before - step) < 2, `dragging the divider resizes the page (${before} -> ${after})`);
+    const [paneWidth, stored] = await markdownPanel.locator('.markdown-pane').evaluate((element) => [element.clientWidth, Number(localStorage.getItem('markdown-width'))]);
+    assert.ok(Math.abs(stored - after / paneWidth) < 0.01, 'the dragged fraction is remembered');
+    await markdownPanel.getByRole('button', { name: 'Markdown 预览', exact: true }).click();
+    await markdownPanel.getByRole('menuitem', { name: '文本', exact: true }).click();
+    await markdownPanel.getByRole('button', { name: '文本', exact: true }).click();
+    await markdownPanel.getByRole('menuitem', { name: 'Markdown 预览', exact: true }).click();
+    await page.getByRole('heading', { name: 'Markdown preview' }).waitFor();
+    assert.ok(Math.abs((await article.boundingBox()).width - after) < 2, 'a page shown again comes back to the dragged width');
+
+    // The host's own divider can make the pane too narrow for the page's fraction, and then the page narrows to its
+    // minimum width too.
+    const separatorBox = await page.getByRole('separator', { name: '调整右侧栏宽度' }).boundingBox();
+    await page.mouse.move(separatorBox.x + separatorBox.width / 2, separatorBox.y + 100);
+    await page.mouse.down();
+    await page.mouse.move(separatorBox.x + 400, separatorBox.y + 100, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForFunction(() => Math.abs(document.querySelector('.markdown-preview').getBoundingClientRect().width - 240) < 2);
     const fileTabs = page.getByRole('tablist', { name: '侧栏标签页' });
     await page.getByRole('button', { name: '后退', exact: true }).click();
     await page.locator('.monaco-editor .view-lines').filter({ hasText: 'CODE_PREVIEW' }).waitFor();
