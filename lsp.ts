@@ -1,7 +1,7 @@
 import { MonacoLspClient } from 'monaco-lsp-client';
 import * as monaco from 'monaco-editor/editor/editor.api.js';
 import type { UiContext } from '@lengmoxxl/sdk/channel';
-import type { FileClick, LspData, LspExit, LspLog, LspSession } from './shared';
+import { machineKey, type FileClick, type LspData, type LspExit, type LspLog, type LspSession } from './shared';
 
 type Transport = ConstructorParameters<typeof MonacoLspClient>[0];
 type Message = Parameters<Transport['send']>[0];
@@ -118,7 +118,7 @@ class LspProxy {
   private stopped = false;
   private uris = new Map<string, string>();
 
-  constructor(private context: UiContext, readonly info: LspSession, private options: OpenOptions, private notify: (reason: string) => void) {}
+  constructor(private context: UiContext, readonly info: LspSession, readonly options: OpenOptions, private notify: (reason: string) => void) {}
 
   // A server outlives the file that opened it, so a notice about it goes to the file its viewer last opened.
   setNotify(notify: (reason: string) => void) { this.notify = notify; }
@@ -380,8 +380,26 @@ export class LanguageServices {
     // A restart is not a failure, so the session being replaced reports nothing on its way out.
     found.proxy.setNotify(() => {});
     found.proxy.stop('语言服务已重启');
-    await this.context.ui.request('lsp-restart', { session: found.view.session });
+    await this.context.ui.request('lsp-close', { session: found.view.session });
     if (!model.isDisposed()) await this.open(found.view.options);
+  }
+
+  // No view is left to report the close, so it goes without a notice.
+  async closeUnused(openFiles: FileClick[]) {
+    for (const [session, proxy] of [...this.bySession]) {
+      const { machine, language } = proxy.options;
+      const root = proxy.info.root;
+      const key = machineKey(machine);
+      const kept = openFiles.some((file) => machineKey(file.machine) === key && languageFor(file.path) === language
+        && file.path.startsWith(root.endsWith('/') ? root : `${root}/`));
+      if (kept) continue;
+      this.bySession.delete(session);
+      this.logs.delete(session);
+      proxy.setNotify(() => {});
+      proxy.stop('语言服务已关闭');
+      await this.context.ui.request('lsp-close', { session });
+    }
+    this.changed();
   }
 
   dispose() {

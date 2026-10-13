@@ -1,10 +1,16 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 const { mkdtempSync, realpathSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { cleanup, createWorkspace, launchApp, testEnv, writeInit } = require('./harness.cjs');
 
+// The language servers running in this test's fixture: another test's window starts its own, with its own home.
+const languageServers = (home) => execFileSync('sh', ['-c', 'ps -Ao pid,command | grep "[b]in/typescript-language-server --stdio" || true'], { encoding: 'utf8' })
+  .trim().split('\n').filter(Boolean)
+  .map((line) => line.split(' ')[0])
+  .filter((pid) => execFileSync('sh', ['-c', `lsof -p ${pid} -a -d cwd -Fn 2>/dev/null || true`], { encoding: 'utf8' }).includes(`n${home}`));
 // Where the mouse has to land to hover one token: the screen position of the token on a visible line of the editor.
 const tokenAt = (page, lineIndex, token) => page.evaluate(([index, text]) => {
   const line = document.querySelectorAll('.monaco-editor .view-line')[index];
@@ -21,7 +27,7 @@ const tokenAt = (page, lineIndex, token) => page.evaluate(([index, text]) => {
   return null;
 }, [lineIndex, token]);
 
-test('a code file gets its language server: hover, jump to a definition, and diagnostics', { timeout: 60000 }, async () => {
+test('a code file keeps a language server for hover, jump, and diagnostics until its workspace closes', { timeout: 60000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-files-lsp-')));
   const env = testEnv(home);
   let desktop;
@@ -90,6 +96,12 @@ test('a code file gets its language server: hover, jump to a definition, and dia
       await page.mouse.move(definitionAt.x, definitionAt.y);
     }
     await hover.waitFor();
+    // Closing the workspace takes the server with it: no file of this window is left to need it.
+    assert.equal(languageServers(home).length, 1);
+    await page.locator('.workspace').first().click({ button: 'right' });
+    await page.getByRole('menuitem', { name: '关闭工作区', exact: true }).click();
+    for (let attempt = 0; attempt < 20 && languageServers(home).length; attempt++) await page.waitForTimeout(250);
+    assert.deepEqual(languageServers(home), []);
   } finally {
     await desktop?.close();
     cleanup(home);

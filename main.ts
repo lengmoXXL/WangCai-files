@@ -2,7 +2,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type { MachineConnection, Process } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
-import { imageMime, type FileClick, type History, type LspData, type Settings } from './shared';
+import { imageMime, machineKey, type FileClick, type History, type LspData, type Settings } from './shared';
 
 // Fields this plugin takes from init.ts.
 export const config = {
@@ -37,9 +37,6 @@ export function activate(context: MainContext) {
   const sessions = new Map<string, { connection: MachineConnection; handle: Process }>();
   const probes = new Map<string, Promise<{ command: string; path: string } | undefined>>();
   const settings: Settings = context.host.config;
-
-  // The machine a key belongs to: the id, plus the host that tells two machines with one id apart.
-  const machineKey = (machine: FileClick['machine']) => `${machine.id}|${machine.host ?? ''}`;
 
   // A daemon started by the app does not inherit a login shell's PATH, so a server is looked up and started with
   // the PATH a login shell would have: the absolute path finds the program, and the PATH is what the program
@@ -173,9 +170,9 @@ export function activate(context: MainContext) {
       const running = sessions.get(session);
       if (running) await running.handle.write(Buffer.from(data, 'base64'));
     }),
-    // Restarting is asked for from the status dot. The process is closed here, and no exit event goes out: the
-    // window that asked drops its own session, and another window meets the new server on its next open.
-    context.ui.handle('lsp-restart', async ({ session }: { session: string }) => {
+    // Closing is asked for by the status dot's restart and by a tab that leaves no file needing the server. The
+    // process is closed here and no exit event goes out: the window that asked has dropped its own session.
+    context.ui.handle('lsp-close', async ({ session }: { session: string }) => {
       const running = sessions.get(session);
       if (!running) return;
       sessions.delete(session);

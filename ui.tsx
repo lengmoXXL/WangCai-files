@@ -323,6 +323,8 @@ export function open(context: UiContext, record?: TabRecord) {
   if (!record || record.id === 'directory') openTab(context, record?.workspaceId ?? activeWorkspaceId);
 }
 
+const openFiles = () => [...histories.values()].map((history) => history.entries[history.index]).filter((file): file is FileClick => file?.type === 'file');
+
 function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
   const key = workspaceId ?? '';
   const history = histories.get(key) ?? { entries: [], index: -1 };
@@ -339,6 +341,7 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
   context.host.tabs({ id: 'directory', title: '文件', workspaceId, onClose() {
     for (const [key, value] of histories) if (value === history) histories.delete(key);
     void context.ui.request('save-history', Object.fromEntries(histories));
+    void services?.closeUnused(openFiles());
   }, mount(container: HTMLElement) {
     container.style.fontFamily = font.family;
     const root = createRoot(container);

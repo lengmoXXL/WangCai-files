@@ -9,6 +9,9 @@ export type LspData = { session: string; data: string };
 export type LspLog = { session: string; text: string };
 export type LspExit = { session: string; code?: number };
 
+// The identity of a machine: the id, plus the host that tells two machines with one id apart.
+export const machineKey = (machine: FileClick['machine']) => `${machine.id}|${machine.host ?? ''}`;
+
 // The config this plugin accepts: main.ts declares a schema for the same fields.
 export type Font = { family: string; size: number; lineHeight?: number };
 type ServerOverride = { command?: string[]; markers?: string[] };
