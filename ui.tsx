@@ -14,7 +14,7 @@ import 'monaco-editor/editor/contrib/gotoSymbol/browser/link/goToDefinitionAtPos
 import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbolQuickAccess.js';
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
-import { LanguageServices } from './lsp';
+import { LanguageServices, buffer, languageFor } from './lsp';
 import { imageMime, type FileClick, type Font, type History, type Settings } from './shared';
 import './style.css';
 
@@ -141,15 +141,12 @@ function Preview({ file, text, mode, navigate, notify, onModel }: { file: FileCl
   useEffect(() => {
     if (mode !== 'text') return;
     const size = font.size;
-    const name = file.path.split('/').pop()!;
-    const language = monaco.languages.getLanguages().find((item) => item.filenames?.includes(name) || item.extensions?.some((extension) => name.endsWith(extension)))?.id ?? 'plaintext';
-    // A language server knows a file only by its own URI, and monaco keeps one model per URI, so a path this
-    // window already shows from another machine is previewed as a file no server can open.
-    const uri = monaco.Uri.file(file.path);
-    const model = monaco.editor.getModel(uri) ? undefined : monaco.editor.createModel(text, language, uri);
+    const language = languageFor(file.path);
+    // A file shown from another machine is the same model.
+    const model = buffer(monaco.Uri.file(file.path), language, text);
     onModel(model);
     const editor = monaco.editor.create(element.current!, {
-      ...(model ? { model } : { value: text, language }), theme: 'wangcai', readOnly: true, domReadOnly: true,
+      model, theme: 'wangcai', readOnly: true, domReadOnly: true,
       automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false,
       fontSize: size, lineHeight: font.lineHeight ? Math.round(size * font.lineHeight) : 0, fontFamily: font.family, lineNumbersMinChars: 3, renderLineHighlight: 'none',
       ariaLabel: '代码预览', contextmenu: false,
@@ -158,8 +155,8 @@ function Preview({ file, text, mode, navigate, notify, onModel }: { file: FileCl
     editor.setPosition(position);
     editor.revealPositionInCenter(position);
     let alive = true;
-    if (model) void services?.open({ machine: file.machine, path: file.path, language, model, navigate, notify: (reason) => { if (alive) notify(reason); } });
-    return () => { alive = false; editor.dispose(); model?.dispose(); onModel(undefined); };
+    void services?.open({ machine: file.machine, path: file.path, language, model, navigate, notify: (reason) => { if (alive) notify(reason); } });
+    return () => { alive = false; editor.dispose(); onModel(undefined); };
   }, [file, text, mode]);
   if (mode === 'markdown') return <MarkdownPage text={text} />;
   if (mode === 'html') return <iframe className="html-frame" ref={frame} title="HTML 预览" sandbox="allow-scripts" src={preview.url} />;

@@ -59,18 +59,20 @@ test('a code file gets its language server: hover, jump to a definition, and dia
     const at = await tokenAt(page, 1, 'answer');
     await page.mouse.move(at.x, at.y);
     await page.locator('.monaco-hover').filter({ hasText: 'const answer: 42' }).waitFor();
+    assert.equal(await page.locator('.goto-definition-link').count(), 0);
     // Holding the trigger key makes monaco draw a link; it must not move the preview on its own.
     await page.keyboard.down('ControlOrMeta');
     await page.mouse.move(at.x + 1, at.y);
+    // The link needs the model of the file it points into, which the plugin reads in.
+    await page.locator('.goto-definition-link').waitFor();
     await page.waitForTimeout(1500);
     assert.equal(await page.locator('.preview-path').inputValue(), source);
     // Following the link opens the definition's file, which monaco cannot open by itself.
     await page.mouse.click(at.x + 1, at.y);
     await page.keyboard.up('ControlOrMeta');
     await page.waitForFunction((path) => document.querySelector('.preview-path').value === path, definition);
-    // A jump resolves its target through monaco's model service, which knows only the models this window has, so
-    // the definition's file is reported as missing once, right before the click opens it.
-    assert.deepEqual(errors, ['Model not found']);
+    // The definition's file was read in for the link, so the jump resolves against it and reports nothing.
+    assert.deepEqual(errors, []);
 
     // The status dot restarts the server of the file it is drawn for, and the new one takes over this window.
     await page.locator('.preview-lsp').click();

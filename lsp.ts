@@ -68,6 +68,19 @@ class Frames {
   }
 }
 
+// The model of a file this window shows or links to: monaco keeps one per URI and the model belongs to the window
+// rather than to the view showing it, so a view borrows it and reading the file again refreshes it in place.
+export function buffer(uri: monaco.Uri, language: string, text: string) {
+  const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(text, language, uri);
+  if (model.getValue() !== text) model.setValue(text);
+  return model;
+}
+
+export function languageFor(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  return monaco.languages.getLanguages().find((item) => item.filenames?.includes(name) || item.extensions?.some((extension) => name.endsWith(extension)))?.id ?? 'plaintext';
+}
+
 type ConnectionState = Transport['state']['value'];
 
 // What monaco's client reads to know whether it can send.
@@ -197,19 +210,30 @@ class LspProxy {
     this.notify(reason);
   }
 
-  // The location comes back even when it is in a file the window has no model for: monaco draws the link
-  // from it, and opening that file is the opener's job, so computing a link never moves the tab by itself.
+  // monaco resolves the location through its own model service, which knows only the models this window has, and a
+  // link needs the model of the file it points into, so a file the window has not opened is read in first.
+  private async loadModel(uri: monaco.Uri) {
+    if (monaco.editor.getModel(uri)) return;
+    const text = await this.context.ui.request<string>('read', { machine: this.options.machine, path: uri.path }).catch(() => undefined);
+    if (text === undefined) return;
+    buffer(uri, languageFor(uri.path), text);
+  }
+
+  // The location is answered even for a file this window has not opened: opening that file is the opener's job, so
+  // computing a link never moves the tab by itself.
   async definition(model: monaco.editor.ITextModel, position: monaco.Position): Promise<monaco.languages.Location[]> {
     const result = await this.request('textDocument/definition', {
       textDocument: { uri: model.uri.toString(true) },
       position: { line: position.lineNumber - 1, character: position.column - 1 },
     });
-    return (Array.isArray(result) ? result : result ? [result] : []).map((item: { uri?: string; targetUri?: string; range?: Range; targetSelectionRange?: Range }) => {
+    const locations = (Array.isArray(result) ? result : result ? [result] : []).map((item: { uri?: string; targetUri?: string; range?: Range; targetSelectionRange?: Range }) => {
       const range = item.targetSelectionRange ?? item.range ?? { start: { line: 0, character: 0 } };
       const line = range.start.line + 1;
       const column = range.start.character + 1;
       return { uri: monaco.Uri.parse(item.targetUri ?? item.uri ?? model.uri.toString(true)), range: new monaco.Range(line, column, line, column) };
     });
+    await Promise.all(locations.map((location) => this.loadModel(location.uri)));
+    return locations;
   }
 
   // The machine is the server's; only the path and the position come from the resource monaco asks about.
