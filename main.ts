@@ -168,10 +168,12 @@ export function activate(context: MainContext) {
       })),
     context.ui.handle('lsp-write', async ({ session, data }: LspData) => {
       const running = sessions.get(session);
-      if (running) await running.handle.write(Buffer.from(data, 'base64'));
+      if (!running) throw new Error('语言服务已关闭');
+      await running.handle.write(Buffer.from(data, 'base64'));
     }),
-    // Closing is asked for by the status dot's restart and by a tab that leaves no file needing the server. The
-    // process is closed here and no exit event goes out: the window that asked has dropped its own session.
+    // Closing is asked for by the status dot's restart, by a tab that leaves no file needing the server, and by
+    // a write the node would not take. The process is closed here and no exit event goes out: the window that
+    // asked has dropped its own session.
     context.ui.handle('lsp-close', async ({ session }: { session: string }) => {
       const running = sessions.get(session);
       if (!running) return;

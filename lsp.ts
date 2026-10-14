@@ -154,7 +154,10 @@ class LspProxy {
     try {
       await this.context.ui.request('lsp-write', { session: this.info.session, data: base64(frame(message)) });
     } catch (error) {
+      // A write the node would not take is no proof the server exited: its process is closed here rather
+      // than left behind for a window that has already dropped it.
       this.stop((error as Error).message);
+      void this.context.ui.request('lsp-close', { session: this.info.session }).catch(() => {});
       return;
     }
     if (!this.stopped && this.state.value.state !== 'open') this.state.set({ state: 'open' });
