@@ -21,9 +21,10 @@ test('view picker browses current terminal directory; file links preview code, M
     const html = join(home, 'page.html');
     const image = join(home, 'photo.png');
     const json = join(home, 'settings.json');
+    const wide = 'const wide = "' + 'wide code block '.repeat(80) + '";';
     writeFileSync(json, '{"ready":true}');
     writeFileSync(code, 'const first = 1;\nconst second = "CODE_PREVIEW";\n');
-    writeFileSync(markdown, '---\nname: sample-skill\ndescription: A frontmatter description that is long enough to wrap inside the metadata panel\nallowed-tools: Read, Grep\nhomepage: https://example.com/sample-skill\n---\n\n# Markdown preview\n\n**Rendered content**\n\n| Key | Value |\n| --- | --- |\n| a | b |\n\n```\n' + 'wide code block '.repeat(80) + '\n```\n\n' + 'A body line tall enough for the pane to scroll.\n\n'.repeat(40) + '<script>window.previewScriptRan = true</script>');
+    writeFileSync(markdown, '---\nname: sample-skill\ndescription: A frontmatter description that is long enough to wrap inside the metadata panel\nallowed-tools: Read, Grep\nhomepage: https://example.com/sample-skill\n---\n\n# Markdown preview\n\n**Rendered content**\n\n| Key | Value |\n| --- | --- |\n| a | b |\n\n```ts\n' + wide + '\n```\n\n' + 'A body line tall enough for the pane to scroll.\n\n'.repeat(40) + '<script>window.previewScriptRan = true</script>');
     writeFileSync(html, '<!doctype html>\n<!-- HTML_SOURCE -->\n<h1 id="heading">Rendered page</h1>\n<script>document.getElementById("heading").dataset.scripted = "yes"</script>\n');
     writeFileSync(binary, Buffer.from([0, 1, 255, 2]));
     writeFileSync(image, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'));
@@ -180,6 +181,22 @@ test('view picker browses current terminal directory; file links preview code, M
     assert.equal(await page.locator('.markdown-meta dd').last().innerText(), 'https://example.com/sample-skill');
     assert.equal(await page.locator('.markdown-preview hr, .markdown-preview h2').count(), 0);
     assert.equal(await page.evaluate(() => window.previewScriptRan), undefined);
+    assert.equal(await page.locator('.markdown-code-head span').innerText(), 'ts');
+    // Monaco tokenizes the fence after the text is painted, so the colors arrive a tick later.
+    await page.locator('.markdown-code-body span').first().waitFor();
+    // Monaco colors with the editor's theme, so a highlighted keyword takes the palette's keyword color.
+    assert.equal(await page.evaluate(() => {
+      const keyword = [...document.querySelectorAll('.markdown-code-body span')].find((span) => span.textContent === 'const');
+      const probe = document.createElement('span');
+      probe.style.color = getComputedStyle(document.documentElement).getPropertyValue('--wc-magenta');
+      document.body.append(probe);
+      const magenta = getComputedStyle(probe).color;
+      probe.remove();
+      return keyword ? getComputedStyle(keyword).color === magenta : false;
+    }), true, 'a fenced block is highlighted');
+    await page.locator('.markdown-code-copy').click();
+    await page.getByRole('button', { name: '已复制', exact: true }).waitFor();
+    assert.equal(await desktop.evaluate(({ clipboard }) => clipboard.readText()), wide);
     const markdownPanel = page.getByRole('tabpanel', { name: '文件' });
     assert.equal(await markdownPanel.locator('.preview-path').inputValue(), markdown);
     await markdownPanel.getByRole('button', { name: 'Markdown 预览', exact: true }).click();
@@ -201,14 +218,14 @@ test('view picker browses current terminal directory; file links preview code, M
     await page.getByRole('heading', { name: 'Markdown preview' }).waitFor();
     // Hovering the sidebar reveals its scrollbar thumbs, so park the pointer before asserting idle panels hide theirs.
     await page.mouse.move(0, 0);
-    for (const selector of ['.markdown-preview', '.markdown-preview pre']) {
+    for (const [selector, size] of [['.markdown-preview', ['10px', '12px']], ['.markdown-preview pre', ['6px', '6px']]]) {
       assert.deepEqual(await page.locator(selector).evaluate((element) => {
         const bar = getComputedStyle(element, '::-webkit-scrollbar');
         const thumb = getComputedStyle(element, '::-webkit-scrollbar-thumb');
         return [bar.width, bar.height, thumb.backgroundColor, thumb.borderRadius,
           getComputedStyle(element, '::-webkit-scrollbar-track').backgroundColor,
           getComputedStyle(element, '::-webkit-scrollbar-button').display];
-      }), ['10px', '12px', 'rgba(0, 0, 0, 0)', '0px', 'rgba(0, 0, 0, 0)', 'none'], selector);
+      }), [...size, 'rgba(0, 0, 0, 0)', '0px', 'rgba(0, 0, 0, 0)', 'none'], selector);
     }
     const thumb = await page.locator('.markdown-preview pre').evaluate(async (element) => {
       element.scrollLeft = 40;

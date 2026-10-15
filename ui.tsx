@@ -164,6 +164,30 @@ function Preview({ file, text, mode, navigate, notify, onModel }: { file: FileCl
   return <div className="code-preview" ref={element} />;
 }
 
+// A block is highlighted with the same languages and theme as the code editor, so a fence and a code file read alike.
+function CodeBlock({ language, text }: { language: string; text: string }) {
+  const code = useRef<HTMLElement>(null);
+  const [copied, setCopied] = useState(false);
+  // Monaco colorizes the element itself and stays in charge of its markup, so a changed text needs a new element
+  // (the `key` below) and this effect to run again; that is what the text dependency is for.
+  useEffect(() => {
+    const resolved = monaco.languages.getLanguages().find(({ id, aliases }) => id === language || aliases?.includes(language))?.id;
+    if (resolved) void monaco.editor.colorizeElement(code.current!, { theme: 'wangcai', mimeType: resolved });
+  }, [language, text]);
+  return <div className="markdown-code">
+    <div className="markdown-code-head">
+      {language && <span>{language}</span>}
+      <button className="markdown-code-copy" type="button" title="复制代码" onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        });
+      }}>{copied ? '已复制' : '复制'}</button>
+    </div>
+    <pre className="markdown-code-body"><code key={text} ref={code}>{text}</code></pre>
+  </div>;
+}
+
 // The markdown page is sized by its own divider: the width is a fraction of the pane, so a window resize keeps the
 // proportion, and one fraction is shared by every markdown file the window shows.
 function MarkdownPage({ text }: { text: string }) {
@@ -203,6 +227,14 @@ function MarkdownPage({ text }: { text: string }) {
       <Markdown remarkPlugins={[remarkGfm]} skipHtml components={{
         a: ({ children }) => <span>{children}</span>,
         img: ({ alt }) => <span>{alt}</span>,
+        // The language is not in `pre`'s props: it is on the `code` element the fence opened, which is the `pre`'s only child.
+        pre: ({ node }) => {
+          const child = node?.children[0];
+          const code = child?.type === 'element' ? child : undefined;
+          const language = String(code?.properties.className ?? '').replace('language-', '').toLowerCase();
+          const text = code?.children[0].type === 'text' ? code.children[0].value.replace(/\n$/, '') : '';
+          return <CodeBlock language={language} text={text} />;
+        },
       }}>{body}</Markdown>
     </article>
     <div className="markdown-divider" ref={divider} role="separator" aria-label="调整预览宽度" aria-orientation="vertical"

@@ -9,8 +9,16 @@
 .markdown-divider { flex: none; display: flex; justify-content: center; align-self: flex-start; height: 100%; position: sticky; top: 0; width: 10px; cursor: col-resize; touch-action: none; }
 .markdown-divider::before { content: ''; align-self: stretch; width: 1px; background: var(--wc-border); }
 .markdown-divider:hover::before { background: var(--wc-accent); }
-.markdown-preview pre { overflow-x: auto; padding: 12px; background: var(--wc-overlay); }
-.markdown-preview code { font-family: Menlo, monospace; }
+/* The block clips what scrolls inside it, so a scrollbar thumb cannot paint into a rounded corner. */
+.markdown-code { margin: 1em 0; background: var(--wc-overlay); border: 1px solid var(--wc-border); border-radius: 6px; overflow: hidden; }
+.markdown-code-head { display: flex; align-items: center; gap: 8px; padding: 2px 4px 2px 10px; color: var(--wc-muted); font-size: 11px; line-height: 1; border-bottom: 1px solid var(--wc-border); }
+.markdown-code-copy { margin-left: auto; padding: 2px 6px; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
+.markdown-code-copy:hover { color: var(--wc-foreground); background: var(--wc-selection); }
+.markdown-code-copy:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
+.markdown-preview pre { margin: 0; overflow-x: auto; padding: 10px 12px; font-size: 12px; line-height: 1.5; }
+/* A code block scrolls sideways often, so its bar is thinner than the pane's own 10 by 12; the element and the class are what outweigh the app's bar rule for a sidebar's descendants. */
+.markdown-preview pre.markdown-code-body::-webkit-scrollbar { width: 6px; height: 6px; }
+.markdown-preview :not(pre) > code { padding: 0.15em 0.35em; font-size: 0.9em; background: var(--wc-overlay); border-radius: 4px; }
 .markdown-preview table { border-collapse: collapse; }
 .markdown-preview th, .markdown-preview td { border: 1px solid var(--wc-border); padding: 4px 8px; }
 .markdown-preview blockquote { margin-left: 0; padding-left: 12px; border-left: 2px solid var(--wc-muted); color: var(--wc-muted); }
