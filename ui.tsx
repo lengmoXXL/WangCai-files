@@ -27,9 +27,9 @@ const histories = new Map<string, History>();
 let services: LanguageServices | undefined;
 jsonDefaults.setModeConfiguration({ tokens: true });
 
-type NavigationProps = { context: UiContext; file: FileClick; navigate: (file: FileClick) => void; refresh: () => void; back?: () => void; forward?: () => void };
+type NavigationProps = { context: UiContext; file: FileClick; navigate: (file: FileClick) => void; refresh: () => void; back?: () => void; forward?: () => void; openPicker: () => void };
 
-function Navigation({ context, file, navigate, refresh, back, forward, children }: NavigationProps & { children?: ReactNode }) {
+function Navigation({ context, file, navigate, refresh, back, forward, openPicker, children }: NavigationProps & { children?: ReactNode }) {
   const [path, setPath] = useState(file.path);
   const [error, setError] = useState('');
   const request = useRef(0);
@@ -56,6 +56,7 @@ function Navigation({ context, file, navigate, refresh, back, forward, children 
           .catch((error: Error) => { if (id === request.current) setError(error.message); });
       }}>
         <input className="preview-path" aria-label="路径" title={file.path} value={path} spellCheck={false}
+          onClick={openPicker}
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => { request.current++; setPath(event.target.value); setError(''); }}
           onKeyDown={(event) => { if (event.key === 'Escape') { request.current++; setPath(file.path); setError(''); } }} />
@@ -262,42 +263,74 @@ function FileView(props: NavigationProps) {
   </section>;
 }
 
-function Directory(props: NavigationProps) {
-  const { context, file, navigate } = props;
-  const [directory, setDirectory] = useState<{ path: string; entries: DirectoryEntry[] }>();
+// The directory chain from what the path and the workspace have in common down to the directory holding the path:
+// the picker gives every level a column of its own.
+function chain(file: FileClick, workspace: string) {
+  const directories: string[] = [];
+  let current = file.type === 'directory' ? file.path : file.path.slice(0, file.path.lastIndexOf('/')) || '/';
+  for (; ; ) {
+    directories.push(current);
+    if (current === '/' || workspace === current || workspace.startsWith(`${current}/`)) return directories.reverse();
+    current = current.slice(0, current.lastIndexOf('/')) || '/';
+  }
+}
+
+function Picker(props: NavigationProps & { workspace: string }) {
+  const { context, file, workspace, navigate } = props;
+  const [entries, setEntries] = useState(new Map<string, DirectoryEntry[]>());
   const [error, setError] = useState('');
+  const [dropped, setDropped] = useState(0);
+  const pane = useRef<HTMLDivElement>(null);
+  const directories = chain(file, workspace);
   useEffect(() => {
     let alive = true;
-    setDirectory(undefined); setError('');
-    void context.ui.request<{ path: string; entries: DirectoryEntry[] }>('list', file).then((result) => {
-      if (alive) setDirectory(result);
-    }).catch((error: Error) => { if (alive) setError(error.message); });
+    setEntries(new Map()); setError(''); setDropped(0);
+    for (const directory of directories) {
+      void context.ui.request<{ path: string; entries: DirectoryEntry[] }>('list', { machine: file.machine, path: directory })
+        .then((listing) => { if (alive) setEntries((current) => new Map(current).set(directory, listing.entries)); })
+        .catch((problem: Error) => { if (alive) setError(problem.message); });
+    }
     return () => { alive = false; };
-  }, [context, file]);
-  return <section className="file-preview" aria-label="文件浏览">
+  }, [context, file, workspace]);
+  // A column is as wide as its own entries, so how much of the chain fits is only known once they are in: the pane
+  // drops the shallowest column until the path's own column fits, leaving the workspace leftmost whenever it can.
+  useLayoutEffect(() => {
+    const element = pane.current;
+    if (element && element.clientWidth && element.scrollWidth > element.clientWidth && dropped < directories.length - 1) setDropped(dropped + 1);
+  }, [file, entries, workspace, dropped, directories.length]);
+  const first = Math.min(dropped, directories.length - 1);
+  return <section className="file-preview" aria-label="文件选择">
     <Navigation {...props} />
     {error ? <div className="file-message" role="alert">{error}</div>
-      : !directory ? <div className="file-message">正在读取…</div>
-      : <div className="file-directory">
-        <nav aria-label="当前目录文件">
-          {directory.path !== '/' && <button onClick={() => navigate({ type: 'directory', machine: file.machine, path: directory.path.slice(0, directory.path.lastIndexOf('/')) || '/' })} aria-label="上级目录">../</button>}
-          {directory.entries.map((entry) => <button key={entry.name} onClick={() => {
-            const path = `${directory.path === '/' ? '' : directory.path}/${entry.name}`;
-            navigate({ type: entry.isDirectory ? 'directory' : 'file', machine: file.machine, path });
-          }}><svg className="file-icon" data-kind={entry.isDirectory ? 'folder' : 'file'} aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4">
-            {entry.isDirectory ? <path d="M2 5h6l2 2h8v10H2z" /> : <path d="M5 2h6l4 4v12H5z M11 2v5h4 M8 11h4 M8 14h4" />}
-          </svg><span>{entry.name}{entry.isDirectory ? '/' : ''}</span></button>)}
-          {!directory.entries.length && <div className="file-message">空目录</div>}
-        </nav>
+      : <div className="file-columns" ref={pane}>
+        {directories.slice(first).map((directory, index) => {
+          const listing = entries.get(directory);
+          // The entry this column holds open: the level below it, which is the path itself under the last one.
+          const opened = directories[index + first + 1] ?? (file.type === 'file' ? file.path : '');
+          return <nav key={directory} className="file-column" aria-label={directory}>
+            {listing?.map((entry) => {
+              const path = `${directory === '/' ? '' : directory}/${entry.name}`;
+              return <button key={entry.name} title={entry.name} aria-current={path === opened || undefined} onClick={() => navigate({ type: entry.isDirectory ? 'directory' : 'file', machine: file.machine, path })}>
+                <svg className="file-icon" data-kind={entry.isDirectory ? 'folder' : 'file'} aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4">
+                  {entry.isDirectory ? <path d="M2 5h6l2 2h8v10H2z" /> : <path d="M5 2h6l4 4v12H5z M11 2v5h4 M8 11h4 M8 14h4" />}
+                </svg><span>{entry.name}{entry.isDirectory ? '/' : ''}</span>
+              </button>;
+            })}
+            {listing?.length === 0 && <div className="file-message">空目录</div>}
+          </nav>;
+        })}
       </div>}
   </section>;
 }
 
-function BrowserView({ context, workspaceId, file, ...navigation }: Omit<NavigationProps, 'file'> & { workspaceId?: string; file?: FileClick }) {
+function BrowserView({ context, workspaceId, file, picking, ...navigation }: Omit<NavigationProps, 'file'> & { workspaceId?: string; file?: FileClick; picking: boolean }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [workspace, setWorkspace] = useState('');
+  // Following the workspace in front: a tab with no path of its own opens the workspace directory itself, and every
+  // tab learns that directory either way, since it is where its picker starts.
+  const following = !file;
   useEffect(() => {
-    if (file) return;
     let alive = true;
     let request = 0;
     const off = context.global.subscribe<WorkspaceActive | null>('workspace:active', (value) => {
@@ -306,16 +339,16 @@ function BrowserView({ context, workspaceId, file, ...navigation }: Omit<Navigat
       setError(''); setLoading(value !== null);
       if (!value) return;
       void context.ui.request<FileClick>('resolve', value)
-        .then((file) => { if (alive && id === request) navigation.navigate(file); })
-        .catch((error: Error) => { if (alive && id === request) { setLoading(false); setError(error.message); } });
+        .then((resolved) => { if (alive && id === request) { setWorkspace(resolved.path); if (following) navigation.navigate(resolved); } })
+        .catch((problem: Error) => { if (alive && id === request) { setLoading(false); setError(problem.message); } });
     });
     void context.global.publish('workspace:query', null);
     return () => { alive = false; off(); };
-  }, [context, workspaceId, file, navigation.navigate]);
+  }, [context, workspaceId, following, navigation.navigate]);
   if (!file) return <div className="file-message" role={error ? 'alert' : undefined}>{error || (loading ? '正在读取…' : '请选择一个已连接的终端')}</div>;
   const key = JSON.stringify([file.machine.id, file.machine.host, file.path, file.line, file.column]);
-  return file.type === 'directory'
-    ? <Directory key={key} context={context} file={file} {...navigation} />
+  return file.type === 'directory' || picking
+    ? <Picker key={key} context={context} file={file} workspace={workspace} {...navigation} />
     : <FileView key={key} context={context} file={file} {...navigation} />;
 }
 
@@ -329,6 +362,7 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
   const key = workspaceId ?? '';
   const history = histories.get(key) ?? { entries: [], index: -1 };
   histories.set(key, history);
+  let picking = false;
   const push = (file: FileClick) => {
     const current = history.entries[history.index];
     if (!current || current.machine.id !== file.machine.id || current.machine.host !== file.machine.host || current.type !== file.type || current.path !== file.path || current.line !== file.line || current.column !== file.column) {
@@ -345,15 +379,18 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
   }, mount(container: HTMLElement) {
     container.style.fontFamily = font.family;
     const root = createRoot(container);
-    const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} file={history.entries[history.index]}
-      navigate={(file) => { push(file); render(); }}
+    const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} file={history.entries[history.index]} picking={picking}
+      navigate={(file) => { picking = false; push(file); render(); }}
+      openPicker={() => { picking = true; render(); }}
       refresh={() => { history.entries[history.index] = { ...history.entries[history.index] }; render(); }}
       back={history.index > 0 ? () => {
+        picking = false;
         history.index--;
         void context.ui.request('save-history', Object.fromEntries(histories));
         render();
       } : undefined}
       forward={history.index < history.entries.length - 1 ? () => {
+        picking = false;
         history.index++;
         void context.ui.request('save-history', Object.fromEntries(histories));
         render();

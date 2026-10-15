@@ -64,9 +64,9 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await createWorkspace(page);
     const workspaces = page.getByRole('tablist', { name: '工作区' }).getByRole('tab');
     await workspaces.first().click();
-    const directory = page.getByRole('navigation', { name: '当前目录文件' });
-    await directory.getByRole('button', { name: '.hidden.md', exact: true }).locator('svg[data-kind=file]').waitFor();
-    await directory.getByRole('button', { name: '子目录 with spaces/', exact: true }).locator('svg[data-kind=folder]').waitFor();
+    const columnOf = (path) => page.getByRole('navigation', { name: path, exact: true });
+    await columnOf(home).getByRole('button', { name: '.hidden.md', exact: true }).locator('svg[data-kind=file]').waitFor();
+    await columnOf(home).getByRole('button', { name: '子目录 with spaces/', exact: true }).locator('svg[data-kind=folder]').waitFor();
     assert.equal(await page.locator('.workspace.selected').evaluate((element) => getComputedStyle(element).backgroundColor),
       await page.locator('.sidebar-tab:has([aria-selected=true])').first().evaluate((element) => getComputedStyle(element).backgroundColor));
     for (const [selector, corners] of [['.sidebar-left', '8px 0px 0px 8px'], ['.workspace.selected', '0px'], ['.sidebar-tab:has([aria-selected=true])', '8px 8px 0px 0px']]) {
@@ -167,18 +167,19 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     assert.equal(await page.getByRole('tab', { name: '文件', exact: true }).count(), 0);
     await picker.click();
     await menu.getByRole('button', { name: '文件', exact: true }).click();
-    await directory.getByRole('button', { name: '.hidden.md', exact: true }).click();
+    await columnOf(home).getByRole('button', { name: '.hidden.md', exact: true }).click();
     await page.getByRole('heading', { name: 'Hidden preview' }).waitFor();
     await page.getByRole('button', { name: '后退', exact: true }).click();
-    await directory.getByRole('button', { name: '子目录 with spaces/', exact: true }).click();
-    await directory.getByRole('button', { name: '空 格.md', exact: true }).click();
+    await columnOf(home).getByRole('button', { name: '子目录 with spaces/', exact: true }).click();
+    await columnOf(join(home, '子目录 with spaces')).getByRole('button', { name: '空 格.md', exact: true }).click();
     await page.getByRole('heading', { name: 'Nested preview' }).waitFor();
     await page.getByRole('button', { name: '后退', exact: true }).click();
-    await directory.getByRole('button', { name: '上级目录' }).click();
-    await directory.getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
+    // Stepping up again lands on the directory the tab opened on.
+    await page.getByRole('button', { name: '后退', exact: true }).click();
+    await columnOf(home).getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
     await page.getByRole('tab', { name: '测试视图', exact: true }).click();
     assert.equal(await page.getByLabel('视图内容').inputValue(), 'preserved');
-    assert.equal(await directory.isVisible(), false);
+    assert.equal(await columnOf(home).isVisible(), false);
     await page.getByRole('tab', { name: '~' }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: '关闭工作区', exact: true }).click();
     await page.getByRole('tablist', { name: '工作区' }).getByRole('tab').waitFor({ state: 'detached' });
@@ -191,7 +192,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await menu.getByRole('button', { name: '文件', exact: true }).click();
     await noTerminal.waitFor();
     await createWorkspace(page);
-    await directory.getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
+    await columnOf(home).getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
     await run(page, 'exit');
     const restart = page.getByRole('button', { name: '重新打开终端', exact: true });
     await restart.waitFor();
@@ -202,7 +203,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await toggle.click();
     await picker.click();
     await menu.getByRole('button', { name: '文件', exact: true }).click();
-    await directory.getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
+    await columnOf(home).getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
     await page.screenshot({ path: 'tests/dist/screenshots/sidebar-layout.png' });
     const closeVisible = page.locator('.sidebar-tab:visible .close-tab');
     while (await closeVisible.count()) await closeVisible.last().click();
