@@ -15,7 +15,7 @@ import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbol
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { LanguageServices, buffer, languageFor } from './lsp';
-import { imageMime, type FileClick, type Font, type History, type Settings } from './shared';
+import { imageMime, machineKey, type FileClick, type Font, type History, type Settings } from './shared';
 import './style.css';
 
 export const title = '文件';
@@ -308,7 +308,7 @@ function chain(file: FileClick, workspace: string) {
 }
 
 function Picker(props: NavigationProps & { workspace: string }) {
-  const { context, file, workspace, navigate } = props;
+  const { context, file, workspace, navigate, refresh } = props;
   const [entries, setEntries] = useState(new Map<string, DirectoryEntry[]>());
   const [error, setError] = useState('');
   const [dropped, setDropped] = useState(0);
@@ -316,8 +316,10 @@ function Picker(props: NavigationProps & { workspace: string }) {
   const directories = chain(file, workspace);
   useEffect(() => {
     let alive = true;
-    setEntries(new Map()); setError(''); setDropped(0);
+    setError(''); setDropped(0);
     for (const directory of directories) {
+      // The chain is read as it changes, so a level that already has a listing keeps its column.
+      if (entries.has(directory)) continue;
       void context.ui.request<{ path: string; entries: DirectoryEntry[] }>('list', { machine: file.machine, path: directory })
         .then((listing) => { if (alive) setEntries((current) => new Map(current).set(directory, listing.entries)); })
         .catch((problem: Error) => { if (alive) setError(problem.message); });
@@ -332,7 +334,8 @@ function Picker(props: NavigationProps & { workspace: string }) {
   }, [file, entries, workspace, dropped, directories.length]);
   const first = Math.min(dropped, directories.length - 1);
   return <section className="file-preview" aria-label="文件选择">
-    <Navigation {...props} />
+    {/* Refreshing is what clears the listings, so the chain is read from scratch again. */}
+    <Navigation {...props} refresh={() => { setEntries(new Map()); refresh(); }} />
     {error ? <div className="file-message" role="alert">{error}</div>
       : <div className="file-columns" ref={pane}>
         {directories.slice(first).map((directory, index) => {
@@ -379,8 +382,11 @@ function BrowserView({ context, workspaceId, file, picking, ...navigation }: Omi
   }, [context, workspaceId, following, navigation.navigate]);
   if (!file) return <div className="file-message" role={error ? 'alert' : undefined}>{error || (loading ? '正在读取…' : '请选择一个已连接的终端')}</div>;
   const key = JSON.stringify([file.machine.id, file.machine.host, file.path, file.line, file.column]);
+  // A machine lists its own directories, while a walk through one keeps the columns it opened, so only a
+  // different machine rebuilds the picker.
+  const pickerKey = machineKey(file.machine);
   return file.type === 'directory' || picking
-    ? <Picker key={key} context={context} file={file} workspace={workspace} {...navigation} />
+    ? <Picker key={pickerKey} context={context} file={file} workspace={workspace} {...navigation} />
     : <FileView key={key} context={context} file={file} {...navigation} />;
 }
 

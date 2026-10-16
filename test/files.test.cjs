@@ -341,10 +341,12 @@ test('view picker browses current terminal directory; file links preview code, M
     assert.equal(await page.getByRole('alert').filter({ hasText: 'No such file' }).count(), 0);
     await address.fill(home);
     await address.press('Enter');
-    await columnOf(home).getByRole('button', { name: 'sample.ts', exact: true }).waitFor();
+    // The handle is taken before the click, since a column that is read again would replace its buttons.
+    const sampleButton = await columnOf(home).getByRole('button', { name: 'sample.ts', exact: true }).elementHandle();
     await columnOf(home).getByRole('button', { name: 'sub/', exact: true }).click();
     assert.equal(await address.inputValue(), join(home, 'sub'));
     await page.getByText('空目录', { exact: true }).waitFor();
+    assert.equal(await page.evaluate((node) => document.contains(node), sampleButton), true, 'the column above keeps its entries');
     assert.equal(await page.locator('.file-column').count(), 2, 'a directory below the workspace gets a column of its own');
     await back.click();
     await columnOf(home).getByRole('button', { name: '说明 file.md', exact: true }).click();
