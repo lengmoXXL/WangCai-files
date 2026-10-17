@@ -4,7 +4,7 @@ const { execFileSync } = require('node:child_process');
 const { mkdtempSync, realpathSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { cleanup, createWorkspace, launchApp, testEnv, writeInit } = require('./harness.cjs');
+const { cleanup, closeWorkspace, codeView, collectErrors, goToPath, openFilesWorkspace, openWindow, pathBox, testEnv, until, waitForPath, workspaceTabs, writeInit } = require('./harness.cjs');
 
 // The language servers running in this test's fixture: another test's window starts its own, with its own home.
 const languageServers = (home) => execFileSync('sh', ['-c', 'ps -Ao pid,command | grep "[b]in/typescript-language-server --stdio" || true'], { encoding: 'utf8' })
@@ -30,7 +30,7 @@ const tokenAt = (page, lineIndex, token) => page.evaluate(([index, text]) => {
 test('a code file keeps a language server for hover, jump, and diagnostics until its workspace closes', { timeout: 60000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-files-lsp-')));
   const env = testEnv(home);
-  let desktop;
+  let desktop, page;
   try {
     writeInit(home, { workspaces: ['terminal-agent'], tabs: ['files'] });
     const source = join(home, 'main.ts');
@@ -43,65 +43,57 @@ test('a code file keeps a language server for hover, jump, and diagnostics until
       "const value: number = 'TYPE_ERROR';",
       '',
     ].join('\n'));
-    desktop = await launchApp(home, env);
-    const page = await desktop.firstWindow();
+    ({ desktop, window: page } = await openWindow(home, env));
     const errors = [];
-    page.on('pageerror', (error) => errors.push(error.message));
-    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
-    await createWorkspace(page);
-    await page.getByRole('button', { name: '切换右侧栏' }).click();
-    await page.getByRole('button', { name: '新建侧栏标签页' }).click();
-    await page.locator('#view-menu').getByRole('button', { name: '文件', exact: true }).click();
-    const address = page.getByRole('textbox', { name: '路径', exact: true });
-    await address.fill(source);
-    await address.press('Enter');
-    await page.locator('.monaco-editor .view-lines').filter({ hasText: 'TYPE_ERROR' }).waitFor();
-    // The status dot in the toolbar names the server behind it on hover.
-    await page.locator('.preview-lsp').hover();
-    await page.locator('.preview-lsp-detail').filter({ hasText: 'typescript-language-server' }).waitFor();
+    collectErrors(page, errors);
+    await openFilesWorkspace(page);
+    await goToPath(page, source);
+    await codeView(page, 'TYPE_ERROR').waitFor();
+    // The widgets a hover and a jump draw in the editor, and the status dot whose menu names the server behind it.
+    const status = page.locator('.preview-lsp');
+    const hover = page.locator('.monaco-hover').filter({ hasText: 'const answer: 42' });
+    const definitionLink = page.locator('.goto-definition-link');
+    const detail = page.locator('.preview-lsp-detail');
+    await status.hover();
+    await detail.filter({ hasText: 'typescript-language-server' }).waitFor();
     await page.mouse.move(0, 0);
     // A diagnostic arrives as a marker, which the editor paints as a squiggle over the offending text.
     await page.locator('.view-overlays div[class*=squiggly]').first().waitFor();
     const at = await tokenAt(page, 1, 'answer');
     await page.mouse.move(at.x, at.y);
-    await page.locator('.monaco-hover').filter({ hasText: 'const answer: 42' }).waitFor();
-    assert.equal(await page.locator('.goto-definition-link').count(), 0);
+    await hover.waitFor();
+    assert.equal(await definitionLink.count(), 0);
     // Holding the trigger key makes monaco draw a link; it must not move the preview on its own.
     await page.keyboard.down('ControlOrMeta');
     await page.mouse.move(at.x + 1, at.y);
     // The link needs the model of the file it points into, which the plugin reads in.
-    await page.locator('.goto-definition-link').waitFor();
+    await definitionLink.waitFor();
     await page.waitForTimeout(1500);
-    assert.equal(await page.locator('.preview-path').inputValue(), source);
+    assert.equal(await pathBox(page).inputValue(), source);
     // Following the link opens the definition's file, which monaco cannot open by itself.
     await page.mouse.click(at.x + 1, at.y);
     await page.keyboard.up('ControlOrMeta');
-    await page.waitForFunction((path) => document.querySelector('.preview-path').value === path, definition);
+    await waitForPath(page, definition);
     // The definition's file was read in for the link, so the jump resolves against it and reports nothing.
     assert.deepEqual(errors, []);
 
     // The status dot restarts the server of the file it is drawn for, and the new one takes over this window.
-    await page.locator('.preview-lsp').click();
-    await page.locator('.preview-lsp-detail').filter({ hasText: '运行中' }).waitFor();
+    await status.click();
+    await detail.filter({ hasText: '运行中' }).waitFor();
     await page.mouse.move(0, 0);
     // The jump left the editor on the definition's file, so its own `answer` token is where a hover can land.
     const definitionAt = await tokenAt(page, 0, 'answer');
     await page.mouse.move(definitionAt.x, definitionAt.y);
     // A restarted server answers only once it has synced the document, and monaco does not repeat a hover that
-    // missed, so the pointer is moved again until it answers.
-    const hover = page.locator('.monaco-hover').filter({ hasText: 'const answer: 42' });
-    for (let attempt = 0; attempt < 6 && !(await hover.count()); attempt++) {
-      await page.waitForTimeout(500);
-      await page.mouse.move(definitionAt.x + 8, definitionAt.y);
-      await page.mouse.move(definitionAt.x, definitionAt.y);
-    }
-    await hover.waitFor();
+    // missed, so the pointer is moved again until it answers. The budget here is the 15s the default timeout allows.
+    await until(() => hover.isVisible(), {
+      act: async () => { await page.mouse.move(definitionAt.x + 8, definitionAt.y); await page.mouse.move(definitionAt.x, definitionAt.y); },
+      attempts: 30, interval: 500,
+    });
     // Closing the workspace takes the server with it: no file of this window is left to need it.
     assert.equal(languageServers(home).length, 1);
-    await page.locator('.workspace').first().click({ button: 'right' });
-    await page.getByRole('menuitem', { name: '关闭工作区', exact: true }).click();
-    for (let attempt = 0; attempt < 20 && languageServers(home).length; attempt++) await page.waitForTimeout(250);
-    assert.deepEqual(languageServers(home), []);
+    await closeWorkspace(workspaceTabs(page).first());
+    await until(() => !languageServers(home).length);
   } finally {
     await desktop?.close();
     cleanup(home);

@@ -3,12 +3,12 @@ const assert = require('node:assert/strict');
 const { mkdtempSync, mkdirSync, writeFileSync, realpathSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { cleanup, createWorkspace, launchApp, run, testEnv, writeInit } = require('./harness.cjs');
+const { activeTerminal, backButton, cleanup, closeTab, closeTabs, closeWorkspace, collectErrors, columnOf, createWorkspace, desktopMain, entry, filesPanels, filesTab, newSidebarTab, openFilesPanel, openFilesTab, openView, openWindow, openWorkspaces, renderedPage, reopen, run, runningGlyph, selectedViewTab, selectedWorkspace, shownPanel, sidebarLeft, sidebarRight, sidebarTabs, sidebarToggle, testEnv, until, viewMenu, viewTab, workspaceBar, workspaceTabs, writeInit } = require('./harness.cjs');
 
 test('view menu switches plugins and handles empty and closed terminals', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-sidebar-')));
   const env = testEnv(home);
-  let desktop;
+  let desktop, page;
   try {
     const other = join(home, '.local/share/wangcai/plugins/other');
     writeInit(home, { workspaces: ['terminal-agent'], tabs: ['files', { id: 'other', directory: other }] });
@@ -27,57 +27,64 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     mkdirSync(join(home, '子目录 with spaces'));
     writeFileSync(join(home, '子目录 with spaces', '空 格.md'), '# Nested preview');
     writeFileSync(join(home, '.hidden.md'), '# Hidden preview');
-    desktop = await launchApp(home, env);
-    let page = await desktop.firstWindow();
+    ({ desktop, window: page } = await openWindow(home, env));
     const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
-    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-    await page.locator('.workspaces').waitFor();
-    const toggle = page.getByRole('button', { name: '切换右侧栏' });
+    collectErrors(page, errors);
+    await workspaceBar(page).waitFor();
+    const toggle = sidebarToggle(page);
     await toggle.click();
-    const picker = page.getByRole('button', { name: '新建侧栏标签页' });
-    const menu = page.locator('#view-menu');
-    const noTerminal = page.locator('.sidebar-panel:visible').getByText('请选择一个已连接的终端', { exact: true });
+    const picker = newSidebarTab(page);
+    const menu = viewMenu(page);
+    const shown = shownPanel(page);
+    const tabs = sidebarTabs(page);
+    const panels = filesPanels(page);
+    const main = desktopMain(page);
+    const back = backButton(page);
+    const noTerminal = shown.getByText('请选择一个已连接的终端', { exact: true });
+    const viewContent = page.getByLabel('视图内容');
     await picker.click();
     await menu.waitFor();
     await page.keyboard.press('Escape');
     await menu.waitFor({ state: 'hidden' });
-    await picker.click();
-    await menu.getByRole('button', { name: '文件', exact: true }).click();
+    await openFilesTab(page);
     await noTerminal.waitFor();
-    assert.equal(await page.locator('.sidebar-panel:visible').count(), 1);
-    await picker.click();
-    await menu.getByRole('button', { name: '测试视图', exact: true }).click();
-    await page.getByLabel('视图内容').fill('preserved');
-    const lastTab = await page.locator('.sidebar-tab').last().boundingBox();
+    assert.equal(await shown.count(), 1);
+    await openView(page, '测试视图');
+    await viewContent.fill('preserved');
+    const lastTab = await tabs.last().boundingBox();
     const plus = await picker.boundingBox();
     const toggleBounds = await toggle.boundingBox();
     assert.ok(plus.x >= lastTab.x + lastTab.width);
     assert.ok(plus.x - lastTab.x - lastTab.width < 10);
     assert.ok(toggleBounds.x > plus.x + plus.width);
-    assert.equal(await page.locator('.sidebar-panel[data-plugin=files]').isVisible(), false);
-    assert.equal(await page.locator('.desktop-main [data-plugin=terminal-agent]').isVisible(), true);
-    assert.equal(await page.locator('.sidebar-panel:visible').count(), 1);
-    await picker.click();
-    await menu.getByRole('button', { name: '文件', exact: true }).click();
+    assert.equal(await panels.isVisible(), false);
+    assert.equal(await main.locator('[data-plugin=terminal-agent]').isVisible(), true);
+    assert.equal(await shown.count(), 1);
+    await openFilesTab(page);
     await createWorkspace(page);
     await createWorkspace(page);
-    const workspaces = page.getByRole('tablist', { name: '工作区' }).getByRole('tab');
+    const workspaces = workspaceTabs(page);
+    const directory = columnOf(page, home);
+    const hidden = entry(directory, '.hidden.md');
+    const subdirectory = entry(directory, '子目录 with spaces/');
+    const selectedRow = selectedWorkspace(page);
+    const selectedTab = selectedViewTab(page);
+    const left = sidebarLeft(page);
+    const right = sidebarRight(page);
     await workspaces.first().click();
-    const columnOf = (path) => page.getByRole('navigation', { name: path, exact: true });
-    await columnOf(home).getByRole('button', { name: '.hidden.md', exact: true }).locator('svg[data-kind=file]').waitFor();
-    await columnOf(home).getByRole('button', { name: '子目录 with spaces/', exact: true }).locator('svg[data-kind=folder]').waitFor();
-    assert.equal(await page.locator('.workspace.selected').evaluate((element) => getComputedStyle(element).backgroundColor),
-      await page.locator('.sidebar-tab:has([aria-selected=true])').first().evaluate((element) => getComputedStyle(element).backgroundColor));
-    for (const [selector, corners] of [['.sidebar-left', '8px 0px 0px 8px'], ['.workspace.selected', '0px'], ['.sidebar-tab:has([aria-selected=true])', '8px 8px 0px 0px']]) {
-      assert.equal(await page.locator(selector).first().evaluate((element) => getComputedStyle(element).borderRadius), corners);
+    await hidden.locator('svg[data-kind=file]').waitFor();
+    await subdirectory.locator('svg[data-kind=folder]').waitFor();
+    assert.equal(await selectedRow.evaluate((element) => getComputedStyle(element).backgroundColor),
+      await selectedTab.evaluate((element) => getComputedStyle(element).backgroundColor));
+    for (const [element, corners] of [[left, '8px 0px 0px 8px'], [selectedRow, '0px'], [selectedTab, '8px 8px 0px 0px']]) {
+      assert.equal(await element.evaluate((element) => getComputedStyle(element).borderRadius), corners);
     }
     // The hairline sits on a pseudo-element, so selecting a row or a tab never moves its icon.
-    for (const selector of ['.workspace.selected', '.sidebar-tab:has([aria-selected=true])']) {
-      assert.deepEqual(await page.locator(selector).first().evaluate((element) => { const style = getComputedStyle(element, '::after'); return [getComputedStyle(element).outlineWidth, style.borderTopWidth, style.borderTopColor]; }), ['0px', '1px', 'rgb(51, 53, 54)']);
+    for (const element of [selectedRow, selectedTab]) {
+      assert.deepEqual(await element.evaluate((element) => { const style = getComputedStyle(element, '::after'); return [getComputedStyle(element).outlineWidth, style.borderTopWidth, style.borderTopColor]; }), ['0px', '1px', 'rgb(51, 53, 54)']);
     }
     // The list's own hairline is an overlay, so a row background can never replace that column.
-    assert.deepEqual(await page.locator('.sidebar-left').evaluate((element) => {
+    assert.deepEqual(await left.evaluate((element) => {
       const hairline = getComputedStyle(element, '::after');
       return [getComputedStyle(element).boxShadow, hairline.position, hairline.right, hairline.width, hairline.backgroundColor, hairline.pointerEvents];
     }), ['none', 'absolute', '0px', '1px', 'rgb(51, 53, 54)', 'none']);
@@ -96,43 +103,40 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     // Keyboard input is needed for :focus-visible after programmatic focus.
     await workspaces.first().focus();
     await page.keyboard.press('ArrowRight');
-    assert.deepEqual(await workspaces.first().evaluate((element) => {
+    await until(async () => (await workspaces.first().evaluate((element) => {
       const style = getComputedStyle(element);
       return [getComputedStyle(element, '::after').borderTopWidth, `${style.outlineWidth} ${style.outlineColor}`];
-    }), ['1px', '2px rgb(57, 148, 188)']);
-    for (const [source, selector, x, y, edge] of [
-      [workspaces.last(), '.workspace.selected', 0.5, 0.85, 'borderBottomColor'],
-      [page.locator('.sidebar-tab').last(), '.sidebar-tab:has([aria-selected=true])', 0.85, 0.5, 'borderRightColor'],
+    })).join() === '1px,2px rgb(57, 148, 188)', { attempts: 60, interval: 250 });
+    for (const [source, target, x, y, edge] of [
+      [workspaces.last(), selectedRow, 0.5, 0.85, 'borderBottomColor'],
+      [tabs.last(), selectedTab, 0.85, 0.5, 'borderRightColor'],
     ]) {
       await source.waitFor();
       const from = await source.boundingBox();
       await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
       await page.mouse.down();
-      const target = page.locator(selector).first();
       await target.waitFor();
       const to = await target.boundingBox();
       await page.mouse.move(to.x + to.width * x, to.y + to.height * y, { steps: 6 });
       // Native dragover needs a second move after dragstart.
       await page.mouse.move(to.x + to.width * x, to.y + to.height * y);
-      await page.waitForFunction((selector) => getComputedStyle(document.querySelector(selector)).boxShadow.includes('inset'), selector);
+      await until(() => target.evaluate((element) => getComputedStyle(element).boxShadow.includes('inset')), { attempts: 60, interval: 250 });
       assert.deepEqual(await target.evaluate((element, edge) => {
         const hairline = getComputedStyle(element, '::after');
         return [hairline.borderTopWidth, getComputedStyle(element).boxShadow.includes('inset'), hairline[edge]];
       }, edge), ['1px', true, 'rgba(0, 0, 0, 0)']);
       await page.keyboard.press('Escape');
       await page.mouse.up();
-      await page.waitForFunction((selector) => getComputedStyle(document.querySelector(selector)).boxShadow === 'none', selector);
+      await until(() => target.evaluate((element) => getComputedStyle(element).boxShadow === 'none'), { attempts: 60, interval: 250 });
     }
-    await workspaces.last().click({ button: 'right' });
-    await page.getByRole('menuitem', { name: '关闭工作区', exact: true }).click();
+    await closeWorkspace(workspaces.last());
     await workspaces.nth(1).waitFor({ state: 'detached' });
     // A running workspace's glyph shows state by lightness: it draws in the foreground colour, not the accent.
-    assert.equal(await page.locator('.workspace.running .glyph').first().evaluate((element) => getComputedStyle(element).stroke), 'rgb(220, 227, 235)');
-    for (const [side, label, delta, minimum, shrink] of [
-      ['left', '调整左侧栏宽度', 60, 120, -600],
-      ['right', '调整右侧栏宽度', -80, 260, 800],
+    assert.equal(await runningGlyph(page).first().evaluate((element) => getComputedStyle(element).stroke), 'rgb(220, 227, 235)');
+    for (const [pane, label, delta, minimum, shrink] of [
+      [left, '调整左侧栏宽度', 60, 120, -600],
+      [right, '调整右侧栏宽度', -80, 260, 800],
     ]) {
-      const pane = page.locator(`.sidebar-${side}`);
       const handle = page.getByRole('separator', { name: label });
       await pane.waitFor();
       const before = (await pane.boundingBox()).width;
@@ -149,85 +153,76 @@ test('view menu switches plugins and handles empty and closed terminals', { time
       await page.mouse.move(box.x + box.width / 2 + shrink, box.y + 100, { steps: 5 });
       await page.mouse.up();
       assert.equal(Math.round((await pane.boundingBox()).width), minimum);
-      assert.ok((await page.locator('.desktop-main').boundingBox()).width >= 240);
+      assert.ok((await main.boundingBox()).width >= 240);
     }
-    const measure = () => page.evaluate(() => ({ inner: innerWidth, left: document.querySelector('.sidebar-left').getBoundingClientRect().width, right: document.querySelector('.sidebar-right').getBoundingClientRect().width }));
+    const measure = async () => ({
+      inner: await page.evaluate(() => innerWidth),
+      left: (await sidebarLeft(page).boundingBox()).width,
+      right: (await sidebarRight(page).boundingBox()).width,
+    });
     const beforeResize = await measure();
     await desktop.evaluate(({ BrowserWindow }) => {
       const win = BrowserWindow.getAllWindows()[0];
       const [width, height] = win.getSize();
       win.setSize(width + 300, height);
     });
-    await page.waitForFunction((left) => document.querySelector('.sidebar-left').getBoundingClientRect().width > left, beforeResize.left);
+    await until(async () => (await sidebarLeft(page).boundingBox()).width > beforeResize.left, { attempts: 60, interval: 250 });
     const afterResize = await measure();
     assert.ok(afterResize.inner > beforeResize.inner);
     assert.ok(Math.abs(afterResize.left / afterResize.inner - beforeResize.left / beforeResize.inner) < 0.01);
     assert.ok(Math.abs(afterResize.right / afterResize.inner - beforeResize.right / beforeResize.inner) < 0.01);
-    await page.getByRole('button', { name: '关闭 文件', exact: true }).click();
-    assert.equal(await page.getByRole('tab', { name: '文件', exact: true }).count(), 0);
-    await picker.click();
-    await menu.getByRole('button', { name: '文件', exact: true }).click();
-    await columnOf(home).getByRole('button', { name: '.hidden.md', exact: true }).click();
-    await page.getByRole('heading', { name: 'Hidden preview' }).waitFor();
-    await page.getByRole('button', { name: '后退', exact: true }).click();
-    await columnOf(home).getByRole('button', { name: '子目录 with spaces/', exact: true }).click();
-    await columnOf(join(home, '子目录 with spaces')).getByRole('button', { name: '空 格.md', exact: true }).click();
-    await page.getByRole('heading', { name: 'Nested preview' }).waitFor();
-    await page.getByRole('button', { name: '后退', exact: true }).click();
+    await closeTab(page, '文件').click();
+    assert.equal(await filesTab(page).count(), 0);
+    await openFilesTab(page);
+    await hidden.click();
+    await renderedPage(page, 'Hidden preview').waitFor();
+    await back.click();
+    await subdirectory.click();
+    await entry(columnOf(page, join(home, '子目录 with spaces')), '空 格.md').click();
+    await renderedPage(page, 'Nested preview').waitFor();
+    await back.click();
     // Stepping up again lands on the directory the tab opened on.
-    await page.getByRole('button', { name: '后退', exact: true }).click();
-    await columnOf(home).getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
-    await page.getByRole('tab', { name: '测试视图', exact: true }).click();
-    assert.equal(await page.getByLabel('视图内容').inputValue(), 'preserved');
-    assert.equal(await columnOf(home).isVisible(), false);
-    await page.getByRole('tab', { name: '~' }).click({ button: 'right' });
-    await page.getByRole('menuitem', { name: '关闭工作区', exact: true }).click();
-    await page.getByRole('tablist', { name: '工作区' }).getByRole('tab').waitFor({ state: 'detached' });
-    assert.equal(await page.locator('.sidebar-panel[data-plugin=files]').count(), 0);
-    const existing = await page.evaluate(async () => (await window.wangcai.request('terminal-agent', 'config')).workspaces.map((workspace) => workspace.id));
+    await back.click();
+    await hidden.waitFor();
+    await viewTab(page, '测试视图').click();
+    assert.equal(await viewContent.inputValue(), 'preserved');
+    assert.equal(await directory.isVisible(), false);
+    await closeWorkspace(workspaces.filter({ hasText: '~' }));
+    await workspaces.waitFor({ state: 'detached' });
+    assert.equal(await panels.count(), 0);
+    const existing = (await openWorkspaces(page)).map((workspace) => workspace.id);
     const stored = await page.evaluate(() => window.wangcai.loadTabs());
     assert.deepEqual(stored.filter((record) => record.workspaceId && !existing.includes(record.workspaceId)), []);
-    if (!(await page.locator('.sidebar-right').isVisible())) await toggle.click();
-    await picker.click();
-    await menu.getByRole('button', { name: '文件', exact: true }).click();
+    await openFilesPanel(page);
     await noTerminal.waitFor();
     await createWorkspace(page);
-    await columnOf(home).getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
-    await run(page, 'exit');
+    await hidden.waitFor();
+    await run(activeTerminal(page), 'exit');
     const restart = page.getByRole('button', { name: '重新打开终端', exact: true });
-    await restart.waitFor();
     await restart.click();
     await restart.waitFor({ state: 'detached' });
     await toggle.click();
-    await page.waitForFunction(() => document.querySelector('.sidebar-right').hidden);
-    await toggle.click();
-    await picker.click();
-    await menu.getByRole('button', { name: '文件', exact: true }).click();
-    await columnOf(home).getByRole('button', { name: '.hidden.md', exact: true }).waitFor();
+    await right.waitFor({ state: 'hidden' });
+    await openFilesPanel(page);
+    await hidden.waitFor();
     await page.screenshot({ path: 'tests/dist/screenshots/sidebar-layout.png' });
-    const closeVisible = page.locator('.sidebar-tab:visible .close-tab');
+    const closeVisible = closeTabs(page);
     while (await closeVisible.count()) await closeVisible.last().click();
-    await page.locator('.sidebar-right').waitFor({ state: 'hidden' });
+    await right.waitFor({ state: 'hidden' });
     assert.equal(await picker.isVisible(), false);
     assert.equal(await toggle.isVisible(), true);
     await toggle.click();
     await picker.waitFor();
     assert.deepEqual(errors, []);
     const beforeReload = await measure();
-    await desktop.close(); desktop = undefined;
-    desktop = await launchApp(home, env);
-    page = await desktop.firstWindow();
-    await page.getByRole('button', { name: '切换右侧栏' }).click();
-    await page.getByRole('button', { name: '新建侧栏标签页' }).click();
-    await page.locator('#view-menu').getByRole('button', { name: '文件', exact: true }).click();
-    const left = page.locator('.sidebar-left');
-    const right = page.locator('.sidebar-right');
-    await left.waitFor();
-    await right.waitFor();
-    const inner = await page.evaluate(() => innerWidth);
-    assert.ok(Math.abs(inner - beforeReload.inner) < 2);
-    assert.ok(Math.abs((await left.boundingBox()).width - beforeReload.left * inner / beforeReload.inner) < 2);
-    assert.ok(Math.abs((await right.boundingBox()).width - beforeReload.right * inner / beforeReload.inner) < 2);
+    ({ desktop, window: page } = await reopen(desktop, home, env));
+    await openFilesPanel(page);
+    await sidebarLeft(page).waitFor();
+    await sidebarRight(page).waitFor();
+    const afterReload = await measure();
+    assert.ok(Math.abs(afterReload.inner - beforeReload.inner) < 2);
+    assert.ok(Math.abs(afterReload.left - beforeReload.left * afterReload.inner / beforeReload.inner) < 2);
+    assert.ok(Math.abs(afterReload.right - beforeReload.right * afterReload.inner / beforeReload.inner) < 2);
   } finally {
     await desktop?.close();
     cleanup(home);

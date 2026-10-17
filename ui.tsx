@@ -27,6 +27,13 @@ const histories = new Map<string, History>();
 let services: LanguageServices | undefined;
 jsonDefaults.setModeConfiguration({ tokens: true });
 
+const watch = (context: UiContext, machine: FileClick['machine'], holder: string, paths: string[], act: () => void) => {
+  // The plugin can be disposed before either request lands, and the machine can be gone; neither is worth a pageerror.
+  void context.ui.request('watch', { holder, machine, paths }).catch(() => undefined);
+  const off = context.ui.subscribe<string>('changed', (path) => { if (paths.includes(path)) act(); });
+  return () => { off(); void context.ui.request('watch', { holder, machine, paths: [] }).catch(() => undefined); };
+};
+
 type NavigationProps = { context: UiContext; file: FileClick; navigate: (file: FileClick) => void; refresh: () => void; back?: () => void; forward?: () => void; openPicker: () => void };
 
 function Navigation({ context, file, navigate, refresh, back, forward, openPicker, children }: NavigationProps & { children?: ReactNode }) {
@@ -256,18 +263,20 @@ function MarkdownPage({ text }: { text: string }) {
   </div>;
 }
 
-function FileView(props: NavigationProps) {
-  const { context, file } = props;
+function FileView(props: NavigationProps & { holder: string }) {
+  const { context, file, holder } = props;
   const [text, setText] = useState<string>();
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   useEffect(() => {
     let alive = true;
     setText(undefined); setError(''); setNotice('');
-    void context.ui.request<string>('read', file).then((text) => { if (alive) setText(text); })
+    const read = () => void context.ui.request<string>('read', file).then((text) => { if (alive) { setText(text); setError(''); } })
       .catch((error: Error) => { if (alive) setError(error.message); });
-    return () => { alive = false; };
-  }, [context, file]);
+    read();
+    const unwatch = watch(context, file.machine, holder, [file.path], read);
+    return () => { alive = false; unwatch(); };
+  }, [context, file, holder]);
   const markdown = /\.(md|markdown)$/i.test(file.path);
   const html = /\.html?$/i.test(file.path);
   const image = imageMime(file.path);
@@ -307,13 +316,15 @@ function chain(file: FileClick, workspace: string) {
   }
 }
 
-function Picker(props: NavigationProps & { workspace: string }) {
-  const { context, file, workspace, navigate, refresh } = props;
+function Picker(props: NavigationProps & { workspace: string; holder: string }) {
+  const { context, file, workspace, holder, navigate } = props;
   const [entries, setEntries] = useState(new Map<string, DirectoryEntry[]>());
   const [error, setError] = useState('');
   const [dropped, setDropped] = useState(0);
+  const [generation, setGeneration] = useState(0);
   const pane = useRef<HTMLDivElement>(null);
   const directories = chain(file, workspace);
+  const redraw = () => { setEntries(new Map()); setGeneration((count) => count + 1); };
   useEffect(() => {
     let alive = true;
     setError(''); setDropped(0);
@@ -325,7 +336,10 @@ function Picker(props: NavigationProps & { workspace: string }) {
         .catch((problem: Error) => { if (alive) setError(problem.message); });
     }
     return () => { alive = false; };
-  }, [context, file, workspace]);
+  }, [context, file, workspace, generation]);
+  // A redraw keeps the watch: it follows the same chain, and giving it up would lose the changes that arrive while
+  // it is gone.
+  useEffect(() => watch(context, file.machine, holder, directories, redraw), [context, file, workspace, holder]);
   // A column is as wide as its own entries, so how much of the chain fits is only known once they are in: the pane
   // drops the shallowest column until the path's own column fits, leaving the workspace leftmost whenever it can.
   useLayoutEffect(() => {
@@ -334,8 +348,7 @@ function Picker(props: NavigationProps & { workspace: string }) {
   }, [file, entries, workspace, dropped, directories.length]);
   const first = Math.min(dropped, directories.length - 1);
   return <section className="file-preview" aria-label="文件选择">
-    {/* Refreshing is what clears the listings, so the chain is read from scratch again. */}
-    <Navigation {...props} refresh={() => { setEntries(new Map()); refresh(); }} />
+    <Navigation {...props} refresh={redraw} />
     {error ? <div className="file-message" role="alert">{error}</div>
       : <div className="file-columns" ref={pane}>
         {directories.slice(first).map((directory, index) => {
@@ -358,7 +371,7 @@ function Picker(props: NavigationProps & { workspace: string }) {
   </section>;
 }
 
-function BrowserView({ context, workspaceId, file, picking, ...navigation }: Omit<NavigationProps, 'file'> & { workspaceId?: string; file?: FileClick; picking: boolean }) {
+function BrowserView({ context, workspaceId, holder, file, picking, ...navigation }: Omit<NavigationProps, 'file'> & { workspaceId?: string; holder: string; file?: FileClick; picking: boolean }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [workspace, setWorkspace] = useState('');
@@ -386,8 +399,8 @@ function BrowserView({ context, workspaceId, file, picking, ...navigation }: Omi
   // different machine rebuilds the picker.
   const pickerKey = machineKey(file.machine);
   return file.type === 'directory' || picking
-    ? <Picker key={pickerKey} context={context} file={file} workspace={workspace} {...navigation} />
-    : <FileView key={key} context={context} file={file} {...navigation} />;
+    ? <Picker key={pickerKey} context={context} file={file} workspace={workspace} holder={holder} {...navigation} />
+    : <FileView key={key} context={context} file={file} holder={holder} {...navigation} />;
 }
 
 export function open(context: UiContext, record?: TabRecord) {
@@ -417,7 +430,7 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
   }, mount(container: HTMLElement) {
     container.style.fontFamily = font.family;
     const root = createRoot(container);
-    const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} file={history.entries[history.index]} picking={picking}
+    const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} holder={key} file={history.entries[history.index]} picking={picking}
       navigate={(file) => { picking = false; push(file); render(); }}
       openPicker={() => { picking = true; render(); }}
       refresh={() => { history.entries[history.index] = { ...history.entries[history.index] }; render(); }}

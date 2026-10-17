@@ -126,6 +126,39 @@ export function activate(context: MainContext) {
       return text;
     })));
 
+  // One watch set per tab: the window keeps a tab per workspace, and a tab that stops showing something must not stop
+  // another tab's watch.
+  const watchers = new Map<string, { key: string; connection: MachineConnection; close: () => void }>();
+  const asked = new Map<string, string>();
+  handlers.push(context.ui.handle('watch', async ({ holder, machine, paths }: { holder: string; machine: FileClick['machine']; paths: string[] }) => {
+    const key = `${machineKey(machine)}|${JSON.stringify(paths)}`;
+    asked.set(holder, key);
+    const previous = watchers.get(holder);
+    if (previous?.key === key) return;
+    // What this tab watched before is given up, since it is about to watch what it shows now.
+    if (previous) {
+      previous.close();
+      // The connection was held only while this tab watched something.
+      previous.connection.disconnect();
+      connections.delete(previous.connection);
+      watchers.delete(holder);
+    }
+    if (!paths.length) return;
+    await withConnection(machine, async (connection, keep) => {
+      // A path that cannot be watched is skipped, so one bad path does not cost the others their watch.
+      const closes = (await Promise.all(paths.map((path) =>
+        connection.fs.watch(path, {}, () => context.ui.publish('changed', path)).catch(() => undefined))))
+        .filter((close): close is () => void => close !== undefined);
+      // A later request from the same tab took the set over while this one was connecting.
+      if (asked.get(holder) !== key || !closes.length || watchers.has(holder)) {
+        for (const close of closes) close();
+        return;
+      }
+      keep();
+      watchers.set(holder, { key, connection, close: () => { for (const close of closes) close(); } });
+    });
+  }));
+
   const historyPath = join(context.host.dataDirectory, 'history.json');
   handlers.push(
     context.ui.handle('history', () => existsSync(historyPath) ? JSON.parse(readFileSync(historyPath, 'utf8')) : {}),
