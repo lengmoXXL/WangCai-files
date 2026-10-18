@@ -27,10 +27,10 @@ const histories = new Map<string, History>();
 let services: LanguageServices | undefined;
 jsonDefaults.setModeConfiguration({ tokens: true });
 
-const watch = (context: UiContext, machine: FileClick['machine'], holder: string, paths: string[], act: () => void) => {
+const watch = (context: UiContext, machine: FileClick['machine'], holder: string, paths: string[], act: (path: string) => void) => {
   // The plugin can be disposed before either request lands, and the machine can be gone; neither is worth a pageerror.
   void context.ui.request('watch', { holder, machine, paths }).catch(() => undefined);
-  const off = context.ui.subscribe<string>('changed', (path) => { if (paths.includes(path)) act(); });
+  const off = context.ui.subscribe<string>('changed', (path) => { if (paths.includes(path)) act(path); });
   return () => { off(); void context.ui.request('watch', { holder, machine, paths: [] }).catch(() => undefined); };
 };
 
@@ -321,25 +321,27 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
   const [entries, setEntries] = useState(new Map<string, DirectoryEntry[]>());
   const [error, setError] = useState('');
   const [dropped, setDropped] = useState(0);
-  const [generation, setGeneration] = useState(0);
+  // Columns to read again: one is read again when the machine reports a change in it, and the listing already on
+  // screen stays until the new one is in, so a directory that changes often does not blink.
+  const [stale, setStale] = useState(new Set<string>());
   const pane = useRef<HTMLDivElement>(null);
   const directories = chain(file, workspace);
-  const redraw = () => { setEntries(new Map()); setGeneration((count) => count + 1); };
+  const redraw = () => setStale(new Set(directories));
+  useEffect(() => { setError(''); setDropped(0); }, [file, workspace]);
   useEffect(() => {
     let alive = true;
-    setError(''); setDropped(0);
     for (const directory of directories) {
       // The chain is read as it changes, so a level that already has a listing keeps its column.
-      if (entries.has(directory)) continue;
+      if (entries.has(directory) && !stale.has(directory)) continue;
       void context.ui.request<{ path: string; entries: DirectoryEntry[] }>('list', { machine: file.machine, path: directory })
-        .then((listing) => { if (alive) setEntries((current) => new Map(current).set(directory, listing.entries)); })
+        .then((listing) => { if (alive) { setEntries((current) => new Map(current).set(directory, listing.entries)); setError(''); } })
         .catch((problem: Error) => { if (alive) setError(problem.message); });
     }
     return () => { alive = false; };
-  }, [context, file, workspace, generation]);
-  // A redraw keeps the watch: it follows the same chain, and giving it up would lose the changes that arrive while
-  // it is gone.
-  useEffect(() => watch(context, file.machine, holder, directories, redraw), [context, file, workspace, holder]);
+  }, [context, file, workspace, stale]);
+  // A reload keeps the watch: it follows the same chain, and giving it up would lose the changes that arrive while
+  // it is gone. Only the level the change is reported in is read again, which is the level a column shows.
+  useEffect(() => watch(context, file.machine, holder, directories, (path) => setStale(new Set([path]))), [context, file, workspace, holder]);
   // A column is as wide as its own entries, so how much of the chain fits is only known once they are in: the pane
   // drops the shallowest column until the path's own column fits, leaving the workspace leftmost whenever it can.
   useLayoutEffect(() => {
