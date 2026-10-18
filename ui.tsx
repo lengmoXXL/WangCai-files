@@ -430,10 +430,15 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
   }, mount(container: HTMLElement) {
     container.style.fontFamily = font.family;
     const root = createRoot(container);
+    // A view is handed the same callbacks on every render: its effect depends on navigate, and a new identity each
+    // render would run that effect again, which asks for the workspace again, which navigates and renders again.
+    const navigate = (file: FileClick) => { picking = false; push(file); render(); };
+    const openPicker = () => { picking = true; render(); };
+    const refresh = () => { history.entries[history.index] = { ...history.entries[history.index] }; render(); };
     const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} holder={key} file={history.entries[history.index]} picking={picking}
-      navigate={(file) => { picking = false; push(file); render(); }}
-      openPicker={() => { picking = true; render(); }}
-      refresh={() => { history.entries[history.index] = { ...history.entries[history.index] }; render(); }}
+      navigate={navigate}
+      openPicker={openPicker}
+      refresh={refresh}
       back={history.index > 0 ? () => {
         picking = false;
         history.index--;
