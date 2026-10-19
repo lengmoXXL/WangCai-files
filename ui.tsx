@@ -326,22 +326,26 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
   const [stale, setStale] = useState(new Set<string>());
   const pane = useRef<HTMLDivElement>(null);
   const directories = chain(file, workspace);
-  const redraw = () => setStale(new Set(directories));
-  useEffect(() => { setError(''); setDropped(0); }, [file, workspace]);
+  const reload = () => setStale(new Set(directories));
   useEffect(() => {
     let alive = true;
+    setError('');
     for (const directory of directories) {
-      // The chain is read as it changes, so a level that already has a listing keeps its column.
       if (entries.has(directory) && !stale.has(directory)) continue;
       void context.ui.request<{ path: string; entries: DirectoryEntry[] }>('list', { machine: file.machine, path: directory })
-        .then((listing) => { if (alive) { setEntries((current) => new Map(current).set(directory, listing.entries)); setError(''); } })
+        .then((listing) => { if (alive) setEntries((current) => new Map(current).set(directory, listing.entries)); })
         .catch((problem: Error) => { if (alive) setError(problem.message); });
     }
+    // A mark is spent by the read it asks for, so a pass that runs for another reason reads nothing again.
+    if (stale.size) setStale(new Set());
     return () => { alive = false; };
   }, [context, file, workspace, stale]);
   // A reload keeps the watch: it follows the same chain, and giving it up would lose the changes that arrive while
-  // it is gone. Only the level the change is reported in is read again, which is the level a column shows.
-  useEffect(() => watch(context, file.machine, holder, directories, (path) => setStale(new Set([path]))), [context, file, workspace, holder]);
+  // it is gone.
+  useEffect(() => watch(context, file.machine, holder, directories, (path) => setStale((current) => new Set(current).add(path))), [context, file, workspace, holder]);
+  // The columns a chain dropped are offered their room again when the chain changes, since another chain packs
+  // differently.
+  useEffect(() => setDropped(0), [file, workspace]);
   // A column is as wide as its own entries, so how much of the chain fits is only known once they are in: the pane
   // drops the shallowest column until the path's own column fits, leaving the workspace leftmost whenever it can.
   useLayoutEffect(() => {
@@ -350,7 +354,7 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
   }, [file, entries, workspace, dropped, directories.length]);
   const first = Math.min(dropped, directories.length - 1);
   return <section className="file-preview" aria-label="文件选择">
-    <Navigation {...props} refresh={redraw} />
+    <Navigation {...props} refresh={reload} />
     {error ? <div className="file-message" role="alert">{error}</div>
       : <div className="file-columns" ref={pane}>
         {directories.slice(first).map((directory, index) => {

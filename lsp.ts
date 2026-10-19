@@ -123,7 +123,7 @@ class LspProxy {
   // A server outlives the file that opened it, so a notice about it goes to the file its viewer last opened.
   setNotify(notify: (reason: string) => void) { this.notify = notify; }
 
-  toString() { return `王财语言服务 ${this.info.session}`; }
+  toString() { return `旺财语言服务 ${this.info.session}`; }
 
   setListener(listener?: (message: Message) => void) { this.listener = listener; }
 
