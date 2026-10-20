@@ -1,6 +1,9 @@
 import type { FileClick, Profile } from '@lengmoxxl/sdk';
 export type { FileClick } from '@lengmoxxl/sdk';
-export type History = { entries: FileClick[]; index: number };
+// Where a visited file was left: its cursor and the offset it was scrolled to.
+export type Position = { line: number; column: number; top: number };
+export type HistoryEntry = FileClick & Partial<Position>;
+export type History = { entries: HistoryEntry[]; index: number };
 
 // The language service main.ts drives for a file: what opening one gives back, and what it publishes while
 // a server runs. Bytes cross the channel as base64, since every payload here is JSON.

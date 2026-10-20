@@ -351,7 +351,7 @@ test('view picker browses current terminal directory; file links preview code, M
     const beforeMissing = await tabs.count();
     await clickLink(pathToFileURL(join(home, 'missing.ts')).href, { label: 'MISSING_LINK' });
     const published = await clickCount();
-    await page.evaluate(({ sessionId, path }) => window.wangcai.request('terminal-agent', 'click', { sessionId, location: { path } }), { sessionId, path: 'missing.ts' });
+    await page.evaluate(({ sessionId, path }) => window.wangcai.call('request', 'terminal-agent', 'click', { sessionId, location: { path } }), { sessionId, path: 'missing.ts' });
     assert.equal(await clickCount(), published);
     assert.equal(await tabs.count(), beforeMissing);
     assert.equal(await alert.filter({ hasText: 'No such file' }).count(), 0);
@@ -383,7 +383,7 @@ test('view picker browses current terminal directory; file links preview code, M
     await page.screenshot({ path: 'tests/dist/screenshots/files-picker.png' });
     await run(terminal, `cd '${subdirectory}'`);
     await page.waitForFunction(async ({ id, path }) => {
-      const result = await window.wangcai.request('files', 'list', { machine: { id: 'local', name: '本机' }, sessionId: id });
+      const result = await window.wangcai.call('request', 'files', 'list', { machine: { id: 'local', name: '本机' }, sessionId: id });
       return result.path === path;
     }, { id: sessionId, path: subdirectory });
     const workspaces = workspaceTabs(page);
@@ -570,6 +570,43 @@ test('navigation history recovers its position and follows workspace tab ownersh
     await firstFile.waitFor();
     assert.equal(await back.isDisabled(), true);
     assert.equal(await forward.isDisabled(), true);
+    assert.deepEqual(errors, []);
+  } finally {
+    await desktop?.close();
+    cleanup(home);
+  }
+});
+
+test('a file is shown again where it was left', { timeout: 180000 }, async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-files-position-')));
+  const env = testEnv(home);
+  let desktop, page;
+  try {
+    writeInit(home);
+    const long = join(home, 'long.md');
+    const other = join(home, 'other.md');
+    writeFileSync(long, '# Long preview\n\n' + 'A body line tall enough for the pane to scroll.\n\n'.repeat(120));
+    writeFileSync(other, '# Other preview');
+    ({ desktop, window: page } = await openWindow(home, env));
+    const errors = [];
+    collectErrors(page, errors);
+    await createWorkspace(page);
+    const machine = { id: 'local', name: '本机' };
+    await clickFile(page, { type: 'file', machine, path: long });
+    await renderedPage(page, 'Long preview').waitFor();
+    const pane = markdownPane(filesPanel(page));
+    await pane.evaluate((element) => { element.scrollTop = 600; });
+    // The scroll event the pane fires after the assignment is what records the offset.
+    await page.waitForTimeout(500);
+    const left = await pane.evaluate((element) => element.scrollTop);
+    assert.ok(left > 0);
+    await clickFile(page, { type: 'file', machine, path: other });
+    await renderedPage(page, 'Other preview').waitFor();
+    const entry = Object.values(await storedHistory(page)).flatMap((history) => history.entries).find((entry) => entry.path === long);
+    assert.ok(entry.top > 0, 'the position the file was left at is kept in its history entry');
+    await backButton(page).click();
+    await renderedPage(page, 'Long preview').waitFor();
+    await until(async () => (await pane.evaluate((element) => element.scrollTop)) === left, { attempts: 40, interval: 250 });
     assert.deepEqual(errors, []);
   } finally {
     await desktop?.close();

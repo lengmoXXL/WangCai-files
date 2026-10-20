@@ -15,7 +15,7 @@ import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbol
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { LanguageServices, buffer, languageFor } from './lsp';
-import { imageMime, machineKey, type FileClick, type Font, type History, type Settings } from './shared';
+import { imageMime, machineKey, type FileClick, type Font, type History, type HistoryEntry, type Position, type Settings } from './shared';
 import './style.css';
 
 export const title = '文件';
@@ -34,7 +34,7 @@ const watch = (context: UiContext, machine: FileClick['machine'], holder: string
   return () => { off(); void context.ui.request('watch', { holder, machine, paths: [] }).catch(() => undefined); };
 };
 
-type NavigationProps = { context: UiContext; file: FileClick; navigate: (file: FileClick) => void; refresh: () => void; back?: () => void; forward?: () => void; openPicker: () => void };
+type NavigationProps = { context: UiContext; file: HistoryEntry; navigate: (file: FileClick) => void; refresh: () => void; back?: () => void; forward?: () => void; openPicker: () => void };
 
 function Navigation({ context, file, navigate, refresh, back, forward, openPicker, children }: NavigationProps & { children?: ReactNode }) {
   const [path, setPath] = useState(file.path);
@@ -133,7 +133,7 @@ function LspStatus({ model }: { model?: monaco.editor.ITextModel }) {
   </div>;
 }
 
-function Preview({ file, text, mode, navigate, notify, onModel }: { file: FileClick; text: string; mode: Mode; navigate: (file: FileClick) => void; notify: (reason: string) => void; onModel: (model?: monaco.editor.ITextModel) => void }) {
+function Preview({ file, text, mode, navigate, notify, onModel, remember }: { file: HistoryEntry; text: string; mode: Mode; navigate: (file: FileClick) => void; notify: (reason: string) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: (at: Partial<Position>) => void }) {
   const element = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   // The preview document asks for its content as soon as it loads, so the listener has to be in place first.
@@ -161,12 +161,24 @@ function Preview({ file, text, mode, navigate, notify, onModel }: { file: FileCl
     });
     const position = { lineNumber: file.line ?? 1, column: file.column ?? 1 };
     editor.setPosition(position);
-    editor.revealPositionInCenter(position);
+    // A tab can mount while its panel is hidden, where the editor has no height to scroll in: the offset a file was
+    // left at waits for a layout, and a file that was never scrolled opens around its line instead.
+    let pending = file.top;
+    const restoreTop = () => {
+      if (pending === undefined || !editor.getLayoutInfo().height) return;
+      editor.setScrollTop(pending);
+      pending = undefined;
+    };
+    if (pending === undefined) editor.revealPositionInCenter(position);
+    else restoreTop();
+    const scrolled = editor.onDidScrollChange(() => remember({ top: editor.getScrollTop() }));
+    const moved = editor.onDidChangeCursorPosition(({ position }) => remember({ line: position.lineNumber, column: position.column }));
+    const laidOut = editor.onDidLayoutChange(restoreTop);
     let alive = true;
     void services?.open({ machine: file.machine, path: file.path, language, model, navigate, notify: (reason) => { if (alive) notify(reason); } });
-    return () => { alive = false; editor.dispose(); onModel(undefined); };
-  }, [file, text, mode]);
-  if (mode === 'markdown') return <MarkdownPage text={text} />;
+    return () => { alive = false; scrolled.dispose(); moved.dispose(); laidOut.dispose(); editor.dispose(); onModel(undefined); };
+  }, [file, text, mode, remember]);
+  if (mode === 'markdown') return <MarkdownPage text={text} top={file.top} remember={remember} />;
   if (mode === 'html') return <iframe className="html-frame" ref={frame} title="HTML 预览" sandbox="allow-scripts" src={preview.url} />;
   return <div className="code-preview" ref={element} />;
 }
@@ -197,19 +209,25 @@ function CodeBlock({ language, text }: { language: string; text: string }) {
 
 // The markdown page is sized by its own divider: the width is a fraction of the pane, so a window resize keeps the
 // proportion, and one fraction is shared by every markdown file the window shows.
-function MarkdownPage({ text }: { text: string }) {
+function MarkdownPage({ text, top, remember }: { text: string; top?: number; remember: (at: Partial<Position>) => void }) {
   const pane = useRef<HTMLDivElement>(null);
   const page = useRef<HTMLDivElement>(null);
   const divider = useRef<HTMLDivElement>(null);
   const drag = useRef<{ left: number; width: number } | undefined>(undefined);
   const painted = useRef(0);
+  // A page can mount while its panel is hidden, where the pane has no size to measure: until a layout gives it one,
+  // the offset it was left at waits, and the ratio it was left at is drawn as it is.
+  const pending = useRef(top ?? 0);
+  const restoreTop = () => {
+    if (!pending.current || !pane.current!.clientHeight) return;
+    pane.current!.scrollTop = pending.current;
+    pending.current = 0;
+  };
   const { fields, body } = splitFrontmatter(text);
   const paint = (ratio: number) => {
     const width = pane.current!.clientWidth;
     // A page that reached the pane's right edge would carry its divider out of reach, so the divider keeps its width.
     const room = width - divider.current!.offsetWidth;
-    // A restored tab that is not the one in front mounts its markdown page while its panel is hidden, so there is no
-    // width to measure yet: the ratio it was left at is all there is to draw.
     painted.current = room > 0 ? Math.min(room / width, Math.max(240 / width, ratio)) : ratio;
     page.current!.style.width = `${painted.current * 100}%`;
   };
@@ -220,13 +238,14 @@ function MarkdownPage({ text }: { text: string }) {
       const ratio = Number(localStorage.getItem('markdown-width'));
       paint(ratio > 0 ? ratio : 0.6);
     };
-    const observer = new ResizeObserver(restore);
+    const observer = new ResizeObserver(() => { restore(); restoreTop(); });
     observer.observe(pane.current!);
     restore();
+    restoreTop();
     return () => observer.disconnect();
   }, []);
 
-  return <div className="markdown-pane" ref={pane}>
+  return <div className="markdown-pane" ref={pane} onScroll={(event) => remember({ top: event.currentTarget.scrollTop })}>
     <article className="markdown-preview" ref={page}>
       {fields.length > 0 && <dl className="markdown-meta">
         {fields.map(([key, value], index) => <Fragment key={index}><dt>{key}</dt><dd>{value}</dd></Fragment>)}
@@ -263,7 +282,7 @@ function MarkdownPage({ text }: { text: string }) {
   </div>;
 }
 
-function FileView(props: NavigationProps & { holder: string }) {
+function FileView(props: NavigationProps & { holder: string; remember: (at: Partial<Position>) => void }) {
   const { context, file, holder } = props;
   const [text, setText] = useState<string>();
   const [error, setError] = useState('');
@@ -300,7 +319,7 @@ function FileView(props: NavigationProps & { holder: string }) {
     {error ? <div className="file-message" role="alert">{error}</div>
       : text === undefined ? <div className="file-message">正在读取…</div>
       : image ? <div className="image-preview"><img src={text} alt={file.path} /></div>
-      : <Preview file={file} text={text} mode={mode} onModel={setModel} navigate={props.navigate} notify={setNotice} />}
+      : <Preview file={file} text={text} mode={mode} onModel={setModel} navigate={props.navigate} notify={setNotice} remember={props.remember} />}
   </section>;
 }
 
@@ -385,7 +404,7 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
   </section>;
 }
 
-function BrowserView({ context, workspaceId, holder, file, picking, ...navigation }: Omit<NavigationProps, 'file'> & { workspaceId?: string; holder: string; file?: FileClick; picking: boolean }) {
+function BrowserView({ context, workspaceId, holder, file, picking, remember, ...navigation }: Omit<NavigationProps, 'file'> & { workspaceId?: string; holder: string; file?: HistoryEntry; picking: boolean; remember: (at: Partial<Position>) => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [workspace, setWorkspace] = useState('');
@@ -414,7 +433,7 @@ function BrowserView({ context, workspaceId, holder, file, picking, ...navigatio
   const pickerKey = machineKey(file.machine);
   return file.type === 'directory' || picking
     ? <Picker key={pickerKey} context={context} file={file} workspace={workspace} holder={holder} {...navigation} />
-    : <FileView key={key} context={context} file={file} holder={holder} {...navigation} />;
+    : <FileView key={key} context={context} file={file} holder={holder} remember={remember} {...navigation} />;
 }
 
 export function open(context: UiContext, record?: TabRecord) {
@@ -449,8 +468,17 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
     const navigate = (file: FileClick) => { picking = false; push(file); render(); };
     const openPicker = () => { picking = true; render(); };
     const refresh = () => { history.entries[history.index] = { ...history.entries[history.index] }; render(); };
+    // Where a file is left belongs to its own history entry, so back and forward return to that spot instead of to
+    // wherever the file was first opened.
+    const remember = (at: Partial<Position>) => {
+      const entry = history.entries[history.index];
+      Object.assign(entry, at);
+      // A file left at its top is where a fresh open puts it, so there is no offset worth keeping.
+      if (entry.top === 0) delete entry.top;
+    };
     const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} holder={key} file={history.entries[history.index]} picking={picking}
       navigate={navigate}
+      remember={remember}
       openPicker={openPicker}
       refresh={refresh}
       back={history.index > 0 ? () => {
