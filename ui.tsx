@@ -333,11 +333,19 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
     for (const directory of directories) {
       if (entries.has(directory) && !stale.has(directory)) continue;
       void context.ui.request<{ path: string; entries: DirectoryEntry[] }>('list', { machine: file.machine, path: directory })
-        .then((listing) => { if (alive) setEntries((current) => new Map(current).set(directory, listing.entries)); })
+        .then((listing) => {
+          if (!alive) return;
+          setEntries((current) => new Map(current).set(directory, listing.entries));
+          // A mark is spent by the read it asked for, so a pass that runs for another reason reads nothing again.
+          setStale((current) => {
+            if (!current.has(directory)) return current;
+            const next = new Set(current);
+            next.delete(directory);
+            return next;
+          });
+        })
         .catch((problem: Error) => { if (alive) setError(problem.message); });
     }
-    // A mark is spent by the read it asks for, so a pass that runs for another reason reads nothing again.
-    if (stale.size) setStale(new Set());
     return () => { alive = false; };
   }, [context, file, workspace, stale]);
   // A reload keeps the watch: it follows the same chain, and giving it up would lose the changes that arrive while
