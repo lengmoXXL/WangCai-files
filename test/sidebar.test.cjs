@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdtempSync, mkdirSync, writeFileSync, realpathSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { activeTerminal, backButton, cleanup, closeTab, closeTabs, closeWorkspace, collectErrors, columnOf, createWorkspace, desktopMain, entry, filesPanels, filesTab, newSidebarTab, openFilesPanel, openFilesTab, openView, openWindow, openWorkspaces, renderedPage, reopen, run, runningGlyph, selectedViewTab, selectedWorkspace, shownPanel, sidebarLeft, sidebarRight, sidebarTabs, sidebarToggle, testEnv, until, viewMenu, viewTab, workspaceBar, workspaceTabs, writeInit } = require('./harness.cjs');
+const { activeTerminal, agentState, backButton, cleanup, closeTab, closeTabs, closeWorkspace, collectErrors, columnOf, createWorkspace, desktopMain, entry, filesPanels, filesTab, newSidebarTab, openFilesPanel, openFilesTab, openView, openWindow, openWorkspaces, renderedPage, reopen, run, selectedViewTab, selectedWorkspace, shownPanel, sidebarLeft, sidebarRight, sidebarTabs, sidebarToggle, testEnv, until, viewMenu, viewTab, workspaceBar, workspaceTabs, writeInit } = require('./harness.cjs');
 
 test('view menu switches plugins and handles empty and closed terminals', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-sidebar-')));
@@ -100,39 +100,56 @@ test('view menu switches plugins and handles empty and closed terminals', { time
       nav.style.cssText = '';
       return [overflowing, full, flush];
     }), [true, true, true]);
-    // Keyboard input is needed for :focus-visible after programmatic focus.
-    await workspaces.first().focus();
-    await page.keyboard.press('ArrowRight');
+    // A redraw of the list replaces its rows and takes their focus with them, so every attempt focuses a row
+    // again and reads the style at once rather than after an interval a redraw could use.
     await until(async () => (await workspaces.first().evaluate((element) => {
       const style = getComputedStyle(element);
       return [getComputedStyle(element, '::after').borderTopWidth, `${style.outlineWidth} ${style.outlineColor}`];
-    })).join() === '1px,2px rgb(57, 148, 188)', { attempts: 60, interval: 250 });
-    for (const [source, target, x, y, edge] of [
-      [workspaces.last(), selectedRow, 0.5, 0.85, 'borderBottomColor'],
-      [tabs.last(), selectedTab, 0.85, 0.5, 'borderRightColor'],
-    ]) {
-      await source.waitFor();
-      const from = await source.boundingBox();
-      await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
-      await page.mouse.down();
-      await target.waitFor();
-      const to = await target.boundingBox();
-      await page.mouse.move(to.x + to.width * x, to.y + to.height * y, { steps: 6 });
-      // Native dragover needs a second move after dragstart.
-      await page.mouse.move(to.x + to.width * x, to.y + to.height * y);
-      await until(() => target.evaluate((element) => getComputedStyle(element).boxShadow.includes('inset')), { attempts: 60, interval: 250 });
-      assert.deepEqual(await target.evaluate((element, edge) => {
-        const hairline = getComputedStyle(element, '::after');
-        return [hairline.borderTopWidth, getComputedStyle(element).boxShadow.includes('inset'), hairline[edge]];
-      }, edge), ['1px', true, 'rgba(0, 0, 0, 0)']);
-      await page.keyboard.press('Escape');
-      await page.mouse.up();
-      await until(() => target.evaluate((element) => getComputedStyle(element).boxShadow === 'none'), { attempts: 60, interval: 250 });
-    }
+    })).join() === '1px,2px rgb(57, 148, 188)', {
+      attempts: 60, interval: 0,
+      // Programmatic focus does not match :focus-visible; keyboard input does.
+      act: async () => { await workspaces.first().focus(); await page.keyboard.press('Shift'); },
+    });
+    // A row drag marks the line it would drop in front of.
+    const rowLine = page.locator('.workspace-line').first();
+    await workspaces.last().waitFor();
+    const fromRow = await workspaces.last().boundingBox();
+    await page.mouse.move(fromRow.x + fromRow.width / 2, fromRow.y + fromRow.height / 2);
+    await page.mouse.down();
+    await rowLine.waitFor();
+    const toLine = await rowLine.boundingBox();
+    // Native dragover needs a second move after dragstart.
+    await page.mouse.move(toLine.x + toLine.width / 2, toLine.y + 0.5, { steps: 6 });
+    await page.mouse.move(toLine.x + toLine.width / 2, toLine.y + 0.5);
+    await until(() => rowLine.evaluate((element) => element.dataset.drop === 'line'
+      && getComputedStyle(element, '::after').backgroundColor === 'rgb(57, 148, 188)'), { attempts: 60, interval: 250 });
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await until(() => rowLine.evaluate((element) => element.dataset.drop === undefined), { attempts: 60, interval: 250 });
+
+    // A tab drag marks the edge of the tab it would drop beside.
+    await tabs.last().waitFor();
+    const fromTab = await tabs.last().boundingBox();
+    await page.mouse.move(fromTab.x + fromTab.width / 2, fromTab.y + fromTab.height / 2);
+    await page.mouse.down();
+    await selectedTab.waitFor();
+    const toTab = await selectedTab.boundingBox();
+    // Native dragover needs a second move after dragstart.
+    await page.mouse.move(toTab.x + toTab.width * 0.85, toTab.y + toTab.height * 0.5, { steps: 6 });
+    await page.mouse.move(toTab.x + toTab.width * 0.85, toTab.y + toTab.height * 0.5);
+    await until(() => selectedTab.evaluate((element) => {
+      const hairline = getComputedStyle(element, '::after');
+      return getComputedStyle(element).boxShadow.includes('inset')
+        && hairline.borderTopWidth === '1px' && hairline.borderRightColor === 'rgba(0, 0, 0, 0)';
+    }), { attempts: 60, interval: 250 });
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await until(() => selectedTab.evaluate((element) => getComputedStyle(element).boxShadow === 'none'), { attempts: 60, interval: 250 });
     await closeWorkspace(workspaces.last());
     await workspaces.nth(1).waitFor({ state: 'detached' });
-    // A running workspace's glyph shows state by lightness: it draws in the foreground colour, not the accent.
-    assert.equal(await runningGlyph(page).first().evaluate((element) => getComputedStyle(element).stroke), 'rgb(220, 227, 235)');
+    // An idle workspace's agent mark draws in the muted colour, not the accent.
+    await until(async () => (await agentState(page, 'idle').count()) === 1, { attempts: 60, interval: 250 });
+    assert.equal(await agentState(page, 'idle').first().evaluate((element) => getComputedStyle(element).color), 'rgb(139, 152, 166)');
     for (const [pane, label, delta, minimum, shrink] of [
       [left, '调整左侧栏宽度', 60, 120, -600],
       [right, '调整右侧栏宽度', -80, 260, 800],
@@ -191,7 +208,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await workspaces.waitFor({ state: 'detached' });
     assert.equal(await panels.count(), 0);
     const existing = (await openWorkspaces(page)).map((workspace) => workspace.id);
-    const stored = await page.evaluate(() => window.wangcai.loadTabs());
+    const stored = await page.evaluate(() => window.wangcai.call('tabs'));
     assert.deepEqual(stored.filter((record) => record.workspaceId && !existing.includes(record.workspaceId)), []);
     await openFilesPanel(page);
     await noTerminal.waitFor();

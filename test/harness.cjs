@@ -1,6 +1,7 @@
 const { execFileSync } = require('node:child_process');
 const assert = require('node:assert/strict');
-const { existsSync, mkdirSync, rmSync, writeFileSync } = require('node:fs');
+const { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } = require('node:fs');
+const { homedir } = require('node:os');
 const { join, resolve } = require('node:path');
 
 // The app runs in place, so the adjacent WangCai checkout must already be built.
@@ -11,9 +12,25 @@ exports.wangcaiApp = () => {
   return root;
 };
 
+// Core is what the app installs and builds into a home, so a case that started from an empty one would clone and
+// build it on every run. The developer's prepared build is copied in instead; WANGCAI_CORE_SOURCE names another.
+const coreSource = process.env.WANGCAI_CORE_SOURCE ?? join(homedir(), '.wangcai-dev/.local/share/wangcai/core-src');
+
+const installCore = (home) => {
+  const build = join(coreSource, 'dist');
+  if (!existsSync(join(build, 'main.cjs'))) throw new Error(`no Core build at ${build}: build the checkout at ${coreSource}, or set WANGCAI_CORE_SOURCE to one that is built`);
+  const storage = join(home, '.local/share/wangcai');
+  mkdirSync(storage, { recursive: true });
+  cpSync(build, join(storage, 'core'), { recursive: true });
+  // The snapshot an agent reads is taken from these sources, so a case gets them as the app's own install would.
+  for (const entry of ['main', 'ui']) cpSync(join(coreSource, entry), join(storage, 'core-src', entry), { recursive: true });
+};
+
 exports.testEnv = (home) => {
   const env = { ...process.env, HOME: home, WANGCAI_HOME: '', SHELL: '/bin/bash', ELECTRON_RENDERER_URL: '' };
   delete env.ELECTRON_RUN_AS_NODE;
+  // The agent Core would install from a release is taken from this checkout instead, so a case needs no network.
+  env.WANGCAI_AGENT_SOURCE = join(exports.wangcaiApp(), 'wangcaicli/dist/debug/wangcai');
   return env;
 };
 
@@ -26,8 +43,11 @@ exports.cleanup = (home) => {
 
 const launchApp = (home, env) => {
   const app = exports.wangcaiApp();
+  // A case starts from a home that already holds Core, so no window has to report an install first.
+  installCore(home);
   const { _electron: electron } = require(join(app, 'node_modules/playwright'));
-  const desktop = electron.launch({ executablePath: require(join(app, 'node_modules/electron')), args: [join(app, 'desktop'), `--user-data-dir=${join(home, 'electron')}`], cwd: app, env });
+  // The window never takes the focus, so a run does not pull the developer out of what they are doing.
+  const desktop = electron.launch({ executablePath: require(join(app, 'node_modules/electron')), args: [join(app, 'desktop'), '--unfocused', `--user-data-dir=${join(home, 'electron')}`], cwd: app, env });
   // A run that is interrupted never reaches its own cleanup, so the app and the agent started with this home
   // are stopped by it here instead of being left for the next run to meet.
   process.once('exit', () => exports.cleanup(home));
@@ -94,7 +114,7 @@ exports.emptyDirectory = (page) => page.getByText('空目录', { exact: true });
 exports.workspaceBar = (page) => page.locator('.workspaces');
 exports.workspaceTabs = (page) => exports.workspaceBar(page).getByRole('tab');
 exports.selectedWorkspace = (page) => page.locator('.workspace.selected');
-exports.runningGlyph = (page) => page.locator('.workspace.running .glyph');
+exports.agentState = (page, state) => page.locator(`.workspaces .workspace .agent-state[data-state=${state}]`);
 const viewStrip = (page) => page.getByRole('tablist', { name: '侧栏标签页' });
 exports.viewTabs = (page) => viewStrip(page).getByRole('tab');
 exports.viewTab = (page, name) => viewStrip(page).getByRole('tab', { name, exact: true });
@@ -129,11 +149,11 @@ exports.collectErrors = (page, errors) => {
 };
 
 // What the app keeps as it runs: the workspaces it has open, and the history the files plugin has stored for them.
-exports.openWorkspaces = (page) => page.evaluate(async () => (await window.wangcai.request('terminal-agent', 'config')).workspaces);
-exports.storedHistory = (page) => page.evaluate(() => window.wangcai.request('files', 'history'));
+exports.openWorkspaces = (page) => page.evaluate(async () => (await window.wangcai.call('request', 'terminal-agent', 'config')).workspaces);
+exports.storedHistory = (page) => page.evaluate(() => window.wangcai.call('request', 'files', 'history'));
 
 // A file link clicked in a terminal. The plugin subscribes as it mounts, so a click sent before that is gone.
-exports.clickFile = (page, file) => page.evaluate((click) => window.wangcai.publish('onclick', click), file);
+exports.clickFile = (page, file) => page.evaluate((click) => window.wangcai.call('publish', 'onclick', click), file);
 
 // The parts of a panel that shows a page: the mode button, the page it renders, the block inside that page which
 // scrolls sideways, the pane both sit in, and the divider the page is dragged by.
