@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdtempSync, mkdirSync, writeFileSync, realpathSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { activeTerminal, agentState, backButton, cleanup, closeTab, closeTabs, closeWorkspace, collectErrors, columnOf, createWorkspace, desktopMain, entry, filesPanels, filesTab, newSidebarTab, openFilesPanel, openFilesTab, openView, openWindow, openWorkspaces, renderedPage, reopen, run, selectedViewTab, selectedWorkspace, shownPanel, sidebarLeft, sidebarRight, sidebarTabs, sidebarToggle, testEnv, until, viewMenu, viewTab, workspaceBar, workspaceTabs, writeInit } = require('./harness.cjs');
+const { activeTerminal, agentState, backButton, boxOf, cleanup, closeTab, closeTabs, closeWorkspace, collectErrors, columnOf, createWorkspace, desktopMain, entry, filesPanels, filesTab, newSidebarTab, openFilesPanel, openFilesTab, openView, openWindow, openWorkspaces, renderedPage, reopen, run, selectedViewTab, selectedWorkspace, shownPanel, sidebarLeft, sidebarRight, sidebarTabs, sidebarToggle, testEnv, until, viewMenu, viewTab, workspaceBar, workspaceTabs, writeInit } = require('./harness.cjs');
 
 test('view menu switches plugins and handles empty and closed terminals', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-sidebar-')));
@@ -113,11 +113,11 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     // A row drag marks the line it would drop in front of.
     const rowLine = page.locator('.workspace-line').first();
     await workspaces.last().waitFor();
-    const fromRow = await workspaces.last().boundingBox();
+    const fromRow = await boxOf(workspaces.last());
     await page.mouse.move(fromRow.x + fromRow.width / 2, fromRow.y + fromRow.height / 2);
     await page.mouse.down();
     await rowLine.waitFor();
-    const toLine = await rowLine.boundingBox();
+    const toLine = await boxOf(rowLine);
     // Native dragover needs a second move after dragstart.
     await page.mouse.move(toLine.x + toLine.width / 2, toLine.y + 0.5, { steps: 6 });
     await page.mouse.move(toLine.x + toLine.width / 2, toLine.y + 0.5);
@@ -129,11 +129,11 @@ test('view menu switches plugins and handles empty and closed terminals', { time
 
     // A tab drag marks the edge of the tab it would drop beside.
     await tabs.last().waitFor();
-    const fromTab = await tabs.last().boundingBox();
+    const fromTab = await boxOf(tabs.last());
     await page.mouse.move(fromTab.x + fromTab.width / 2, fromTab.y + fromTab.height / 2);
     await page.mouse.down();
     await selectedTab.waitFor();
-    const toTab = await selectedTab.boundingBox();
+    const toTab = await boxOf(selectedTab);
     // Native dragover needs a second move after dragstart.
     await page.mouse.move(toTab.x + toTab.width * 0.85, toTab.y + toTab.height * 0.5, { steps: 6 });
     await page.mouse.move(toTab.x + toTab.width * 0.85, toTab.y + toTab.height * 0.5);
@@ -222,7 +222,7 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     await right.waitFor({ state: 'hidden' });
     await openFilesPanel(page);
     await hidden.waitFor();
-    await page.screenshot({ path: 'tests/dist/screenshots/sidebar-layout.png' });
+    await page.screenshot({ path: 'test/output/screenshots/sidebar-layout.png' });
     const closeVisible = closeTabs(page);
     while (await closeVisible.count()) await closeVisible.last().click();
     await right.waitFor({ state: 'hidden' });

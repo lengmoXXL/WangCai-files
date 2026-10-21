@@ -4,7 +4,7 @@ const { mkdtempSync, writeFileSync, mkdirSync, realpathSync, statSync } = requir
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { activeTerminal, backButton, cleanup, clickFile, closeTabs, codeView, collectErrors, columnOf, columns, createWorkspace, desktopMain, editorLines, emptyDirectory, entry, filePicker, filePreview, filesPanel, filesPanels, filesTab, forwardButton, goToPath, goToPathEntry, markdownDivider, markdownPage, markdownPane, markdownScroll, modeButton, newSidebarTab, openFilesPanel, openFilesTab, openWindow, openWorkspaces, pathBox, previewMenu, previewMode, previewModes, refreshButton, renderedPage, reopen, run, shownPanel, sidebarRight, sidebarToggle, storedHistory, terminalRow, terminalUp, testEnv, until, viewMenu, viewTabs, waitForPath, wangcaiApp, workspaceBar, workspaceTabs, writeInit } = require('./harness.cjs');
+const { activeTerminal, backButton, cleanup, clickFile, closeTabs, codeView, collectErrors, columnOf, columns, createWorkspace, desktopMain, editorLines, emptyDirectory, entry, filePicker, filePreview, filesPanel, filesPanels, filesTab, forgetTabs, forwardButton, goToPath, goToPathEntry, markdownDivider, markdownPage, markdownPane, markdownScroll, modeButton, newSidebarTab, openFilesPanel, openFilesTab, openWindow, openWorkspaces, pathBox, previewMenu, previewMode, previewModes, refreshButton, renderedPage, reopen, run, shownPanel, sidebarRight, sidebarToggle, storedHistory, terminalRow, terminalUp, testEnv, until, viewMenu, viewTabs, waitForPath, wangcaiApp, workspaceBar, workspaceTabs, writeInit } = require('./harness.cjs');
 
 const app = wangcaiApp();
 
@@ -172,7 +172,7 @@ test('view picker browses current terminal directory; file links preview code, M
     assert.equal(await mode.count(), 0);
     assert.equal(await panel.locator('.preview-header').evaluate((element) => getComputedStyle(element).fontSize), '12px');
     assert.equal(await lines.evaluate((element) => getComputedStyle(element).fontSize), '12px');
-    await page.screenshot({ path: 'tests/dist/screenshots/files-code.png' });
+    await page.screenshot({ path: 'test/output/screenshots/files-code.png' });
     assert.equal(await previewSection.locator('.monaco-editor').evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(18, 19, 20)');
     await preview.waitFor();
     const workerReady = page.waitForEvent('worker');
@@ -225,7 +225,7 @@ test('view picker browses current terminal directory; file links preview code, M
     assert.equal(await desktop.evaluate(({ clipboard }) => clipboard.readText()), wide);
     assert.equal(await address.inputValue(), markdown);
     assert.deepEqual(await previewModes(panel), ['文本', 'Markdown 预览']);
-    await page.screenshot({ path: 'tests/dist/screenshots/files-modes.png' });
+    await page.screenshot({ path: 'test/output/screenshots/files-modes.png' });
     await page.locator('.menu-backdrop').click();
     assert.equal(await previewMenu(panel).count(), 0);
     assert.equal(await mode.evaluate((element) => getComputedStyle(element).fontSize), '12px');
@@ -329,7 +329,7 @@ test('view picker browses current terminal directory; file links preview code, M
     await renderedMarkdown.waitFor();
     assert.equal(await tabs.count(), tabCount);
 
-    await page.screenshot({ path: 'tests/dist/screenshots/files-preview.png' });
+    await page.screenshot({ path: 'test/output/screenshots/files-preview.png' });
     await clickLink(pathToFileURL(html).href, { label: 'HTML_LINK' });
     const htmlFrame = page.frameLocator('.html-frame');
     await htmlFrame.locator('#heading[data-scripted=yes]').waitFor();
@@ -380,7 +380,7 @@ test('view picker browses current terminal directory; file links preview code, M
     await openFilesPanel(page);
     await shownImage.waitFor();
     await goToPathEntry(page, home, 'sample.ts');
-    await page.screenshot({ path: 'tests/dist/screenshots/files-picker.png' });
+    await page.screenshot({ path: 'test/output/screenshots/files-picker.png' });
     await run(terminal, `cd '${subdirectory}'`);
     await page.waitForFunction(async ({ id, path }) => {
       const result = await window.wangcai.call('request', 'files', 'list', { machine: { id: 'local', name: '本机' }, sessionId: id });
@@ -398,7 +398,7 @@ test('view picker browses current terminal directory; file links preview code, M
     await sample.waitFor();
     await workspaces.first().click();
     await empty.waitFor();
-    await page.screenshot({ path: 'tests/dist/screenshots/files-picker-empty.png' });
+    await page.screenshot({ path: 'test/output/screenshots/files-picker-empty.png' });
     writeFileSync(join(home, 'sub', 'inside.md'), '# Directory link preview');
     await clickLink('./sub/');
     await filesTab(page).waitFor();
@@ -448,6 +448,8 @@ test('view picker browses current terminal directory; file links preview code, M
     devServer = await createServer({ ...config.renderer, configFile: false, server: { port: 0, host: '127.0.0.1' } });
     await devServer.listen();
     env.ELECTRON_RENDERER_URL = `http://127.0.0.1:${devServer.httpServer.address().port}`;
+    // This reopen is about the plugin mounting in a new window, not about the tabs the closed one saved.
+    forgetTabs(home);
     ({ desktop, window: page } = await reopen(desktop, home, env));
     await workspaceBar(page).waitFor();
     // The window this reopen made is a page of its own, so its preview is taken from the page that is open now.

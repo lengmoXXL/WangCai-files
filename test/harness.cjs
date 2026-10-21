@@ -62,6 +62,10 @@ exports.openWindow = async (home, env) => {
   return { desktop, window: await desktop.firstWindow() };
 };
 
+// A reopen opens the saved tabs on top of the ones init.ts declares, which leaves two panels for one plugin; dropping
+// the saved list leaves the window that list alone makes.
+exports.forgetTabs = (home) => rmSync(join(home, '.local/share/wangcai/tabs.json'), { force: true });
+
 // The test replaces both handles, so anything the reopen needs in place is set up before it, in the env it launches with.
 exports.reopen = async (desktop, home, env) => {
   await desktop.close();
@@ -102,6 +106,14 @@ exports.until = async (holds, { act, attempts = 20, interval = 250 } = {}) => {
     await new Promise((resolve) => setTimeout(resolve, interval));
   }
   assert.ok(await holds(), 'the app did not react');
+};
+
+// A list redraws as the app reports, which can take away the row a drag starts from between the wait that found it and
+// the move that needs it, so a box is asked for again until one comes back.
+exports.boxOf = async (locator) => {
+  let box;
+  await exports.until(async () => (box = await locator.boundingBox()) !== null, { attempts: 60 });
+  return box;
 };
 
 // The columns the panel lays out, one per directory of the path it shows, and a column's entries as buttons.
