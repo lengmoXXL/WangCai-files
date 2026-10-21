@@ -6,10 +6,15 @@ import { machineKey, type FileClick, type LspData, type LspExit, type LspLog, ty
 type Transport = ConstructorParameters<typeof MonacoLspClient>[0];
 type Message = Parameters<Transport['send']>[0];
 
-// The method this plugin answers itself: a definition names a location in a file the window may not have
-// open, and monaco's client translates locations against open models only, so it would fail on them.
-const ownMethods = new Set(['textDocument/definition']);
-const ownProviders = ['definitionProvider'];
+// The location features this plugin answers itself, and the capability each method is announced under: a location may
+// name a file the window has not opened, which monaco's client translates against its open models only.
+export const ownProviders = {
+  definitionProvider: 'textDocument/definition',
+  implementationProvider: 'textDocument/implementation',
+  typeDefinitionProvider: 'textDocument/typeDefinition',
+  referencesProvider: 'textDocument/references',
+};
+const ownMethods = new Set<string>(Object.values(ownProviders));
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -117,11 +122,15 @@ class LspProxy {
   private initializing?: unknown;
   private stopped = false;
   private uris = new Map<string, string>();
+  private methods = new Set<string>();
 
   constructor(private context: UiContext, readonly info: LspSession, readonly options: OpenOptions, private notify: (reason: string) => void) {}
 
   // A server outlives the file that opened it, so a notice about it goes to the file its viewer last opened.
   setNotify(notify: (reason: string) => void) { this.notify = notify; }
+
+  // Whether the server answers a method, which the preview's menu offers only then.
+  supports(method: string) { return this.methods.has(method); }
 
   toString() { return `旺财语言服务 ${this.info.session}`; }
 
@@ -213,8 +222,7 @@ class LspProxy {
     this.notify(reason);
   }
 
-  // monaco resolves the location through its own model service, which knows only the models this window has, and a
-  // link needs the model of the file it points into, so a file the window has not opened is read in first.
+  // A link needs the model of the file it points into, so a file the window has not opened is read in first.
   private async loadModel(uri: monaco.Uri) {
     if (monaco.editor.getModel(uri)) return;
     const text = await this.context.ui.request<string>('read', { machine: this.options.machine, path: uri.path }).catch(() => undefined);
@@ -222,21 +230,45 @@ class LspProxy {
     buffer(uri, languageFor(uri.path), text);
   }
 
-  // The location is answered even for a file this window has not opened: opening that file is the opener's job, so
-  // computing a link never moves the tab by itself.
-  async definition(model: monaco.editor.ITextModel, position: monaco.Position): Promise<monaco.languages.Location[]> {
-    const result = await this.request('textDocument/definition', {
+  // monaco's client lowercases the URI it syncs, and a server names its locations the way it was told, so a location
+  // of a file the window has open takes that model's spelling: the editor knows no model by the lowercased one.
+  private spelled(uri: monaco.Uri) {
+    const lower = uri.toString(true).toLowerCase();
+    return monaco.editor.getModels().find((model) => model.uri.toString(true).toLowerCase() === lower)?.uri ?? uri;
+  }
+
+  private async locations(model: monaco.editor.ITextModel, position: monaco.Position, method: string, extra?: Record<string, unknown>): Promise<monaco.languages.Location[]> {
+    // A server that cannot answer the method, or fails to, gives no location.
+    const result = await this.request(method, {
       textDocument: { uri: model.uri.toString(true) },
       position: { line: position.lineNumber - 1, character: position.column - 1 },
-    });
+      ...extra,
+    }).catch(() => undefined);
     const locations = (Array.isArray(result) ? result : result ? [result] : []).map((item: { uri?: string; targetUri?: string; range?: Range; targetSelectionRange?: Range }) => {
       const range = item.targetSelectionRange ?? item.range ?? { start: { line: 0, character: 0 } };
       const line = range.start.line + 1;
       const column = range.start.character + 1;
-      return { uri: monaco.Uri.parse(item.targetUri ?? item.uri ?? model.uri.toString(true)), range: new monaco.Range(line, column, line, column) };
+      return { uri: this.spelled(monaco.Uri.parse(item.targetUri ?? item.uri ?? model.uri.toString(true))), range: new monaco.Range(line, column, line, column) };
     });
+    // Opening the file is the opener's job, so reading it in for a location never moves the tab by itself.
     await Promise.all(locations.map((location) => this.loadModel(location.uri)));
     return locations;
+  }
+
+  definition(model: monaco.editor.ITextModel, position: monaco.Position) {
+    return this.locations(model, position, ownProviders.definitionProvider);
+  }
+
+  implementation(model: monaco.editor.ITextModel, position: monaco.Position) {
+    return this.locations(model, position, ownProviders.implementationProvider);
+  }
+
+  typeDefinition(model: monaco.editor.ITextModel, position: monaco.Position) {
+    return this.locations(model, position, ownProviders.typeDefinitionProvider);
+  }
+
+  references(model: monaco.editor.ITextModel, position: monaco.Position) {
+    return this.locations(model, position, ownProviders.referencesProvider, { context: { includeDeclaration: true } });
   }
 
   // The machine is the server's; only the path and the position come from the resource monaco asks about.
@@ -261,10 +293,14 @@ class LspProxy {
       else waiting.resolve(result);
       return;
     }
-    // The capabilities a server announces decide which features monaco's client turns on, so the ones this
-    // plugin answers itself are dropped before the client reads them.
+    // The capabilities a server announces decide which features monaco's client turns on, so the ones this plugin
+    // answers itself are kept for the menu and dropped before the client reads them.
     if (id === this.initializing) {
-      for (const provider of ownProviders) delete result?.capabilities?.[provider];
+      const capabilities = result?.capabilities ?? {};
+      for (const [provider, method] of Object.entries(ownProviders)) {
+        if (capabilities[provider]) this.methods.add(method);
+        delete capabilities[provider];
+      }
       this.initializing = undefined;
     }
     this.listener?.(message);
@@ -276,10 +312,13 @@ class LspProxy {
     if (!params) return false;
     const listed = params.registrations ?? params.unregisterations;
     if (!listed) return false;
+    const mine = listed.filter((item) => ownMethods.has(item.method));
+    // Only a registration offers a method: an unregistration must not add one back to the menu.
+    if (params.registrations) for (const item of mine) this.methods.add(item.method);
     const kept = listed.filter((item) => !ownMethods.has(item.method));
     if (kept.length === listed.length) return false;
     if (kept.length) {
-      if (params.registrations === listed) params.registrations = kept;
+      if (params.registrations) params.registrations = kept;
       else params.unregisterations = kept;
       return false;
     }
