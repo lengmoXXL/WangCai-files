@@ -15,7 +15,7 @@ import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbol
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { LanguageServices, buffer, languageFor, ownProviders } from './lsp';
-import { imageMime, machineKey, type FileClick, type Font, type History, type HistoryEntry, type Position, type Settings } from './shared';
+import { imageMime, machineKey, type FileClick, type Font, type GitHunk, type GitStatus, type History, type HistoryEntry, type Position, type Settings } from './shared';
 import './style.css';
 
 export const title = '文件';
@@ -142,7 +142,35 @@ const lspActions = [
   { method: ownProviders.referencesProvider, action: 'editor.action.referenceSearch.trigger', label: '查找引用' },
 ];
 
-function Preview({ file, text, mode, navigate, notify, onModel, remember }: { file: HistoryEntry; text: string; mode: Mode; navigate: (file: FileClick) => void; notify: (reason: string) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember }) {
+// The gutter states a diff implies: removed lines paired with added ones read as a modification, and whatever is left
+// over is an addition, or a deletion marked on the line that now follows it.
+function lineStates(hunks: GitHunk[], lineCount: number) {
+  const states: { line: number; kind: 'added' | 'modified' | 'deleted' }[] = [];
+  for (const hunk of hunks) {
+    let line = hunk.newStart;
+    let block: { start: number; removed: number; added: number } | undefined;
+    const flush = () => {
+      if (!block) return;
+      const paired = Math.min(block.removed, block.added);
+      for (let index = 0; index < paired; index++) states.push({ line: block.start + index, kind: 'modified' });
+      for (let index = paired; index < block.added; index++) states.push({ line: block.start + index, kind: 'added' });
+      if (block.removed > block.added) states.push({ line: Math.min(block.start + block.added, lineCount), kind: 'deleted' });
+      block = undefined;
+    };
+    for (const kind of hunk.lines) {
+      if (kind === 'context') { flush(); line++; }
+      else {
+        if (!block) block = { start: line, removed: 0, added: 0 };
+        if (kind === 'removed') block.removed++;
+        else { block.added++; line++; }
+      }
+    }
+    flush();
+  }
+  return states;
+}
+
+function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; notify: (reason: string) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember }) {
   const element = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   // The preview document asks for its content as soon as it loads, so the listener has to be in place first.
@@ -215,6 +243,17 @@ function Preview({ file, text, mode, navigate, notify, onModel, remember }: { fi
       scrolled.dispose(); moved.dispose(); laidOut.dispose(); editor.dispose(); onModel(undefined);
     };
   }, [file, text, mode, remember]);
+  // Git can report new marks without the text changing, so they are applied whenever the read returns them.
+  useEffect(() => {
+    const editor = control.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const decoration = editor.createDecorationsCollection(lineStates(hunks, model.getLineCount()).map(({ line, kind }) => ({
+      range: new monaco.Range(line, 1, line, 1),
+      options: { linesDecorationsClassName: `git-line-${kind}` },
+    })));
+    return () => decoration.clear();
+  }, [hunks, text, mode]);
   if (mode === 'markdown') return <MarkdownPage text={text} top={file.top} remember={(at) => remember(file, at)} />;
   if (mode === 'html') return <iframe className="html-frame" ref={frame} title="HTML 预览" sandbox="allow-scripts" src={preview.url} />;
   return <>
@@ -339,19 +378,26 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember 
   const [text, setText] = useState<string>();
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  useEffect(() => {
-    let alive = true;
-    setText(undefined); setError(''); setNotice('');
-    const read = () => void context.ui.request<string>('read', file).then((text) => { if (alive) { setText(text); setError(''); } })
-      .catch((error: Error) => { if (alive) setError(error.message); });
-    read();
-    const unwatch = watch(context, file.machine, holder, [file.path], read);
-    return () => { alive = false; unwatch(); };
-  }, [context, file, holder]);
+  const [hunks, setHunks] = useState<GitHunk[]>([]);
   const markdown = /\.(md|markdown)$/i.test(file.path);
   const html = /\.html?$/i.test(file.path);
   const image = imageMime(file.path);
   const modes: Mode[] = image ? [] : ['text', ...(markdown ? ['markdown' as const] : []), ...(html ? ['html' as const] : [])];
+  useEffect(() => {
+    let alive = true;
+    setText(undefined); setError(''); setNotice(''); setHunks([]);
+    const read = () => {
+      void context.ui.request<string>('read', file).then((text) => { if (alive) { setText(text); setError(''); } })
+        .catch((error: Error) => { if (alive) setError(error.message); });
+      // The marks describe this text, so they are read with it; an image is a data URL with no lines to mark.
+      if (!image) void context.ui.request<GitHunk[] | null>('git-lines', { machine: file.machine, path: file.path })
+        .then((lines) => { if (alive) setHunks(lines ?? []); })
+        .catch(() => { if (alive) setHunks([]); });
+    };
+    read();
+    const unwatch = watch(context, file.machine, holder, [file.path], read);
+    return () => { alive = false; unwatch(); };
+  }, [context, file, holder]);
   const [mode, setMode] = useState<Mode>(html ? 'html' : markdown ? 'markdown' : 'text');
   const [model, setModel] = useState<monaco.editor.ITextModel>();
   useEffect(() => {
@@ -371,7 +417,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember 
     {error ? <div className="file-message" role="alert">{error}</div>
       : text === undefined ? <div className="file-message">正在读取…</div>
       : image ? <div className="image-preview"><img src={text} alt={file.path} /></div>
-      : <Preview file={file} text={text} mode={mode} onModel={setModel} navigate={props.navigate} notify={setNotice} remember={props.remember} />}
+      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={props.navigate} notify={setNotice} remember={props.remember} />}
   </section>;
 }
 
@@ -387,6 +433,25 @@ function chain(file: FileClick, workspace: string) {
   }
 }
 
+// Which child a folder takes its state from when several of them changed: the conflict first, the untracked last.
+const gitRanks: Record<string, number> = { '!': 0, D: 1, M: 2, T: 3, A: 4, R: 5, C: 6, U: 7 };
+
+// A changed path's own letter, plus the most severe letter among its changed descendants for each folder above it.
+function markFolders({ root, states }: GitStatus) {
+  const marks = new Map<string, string>();
+  for (const [path, letter] of Object.entries(states)) {
+    const file = `${root === '/' ? '' : root}/${path}`;
+    marks.set(file, letter);
+    for (let directory = file.slice(0, file.lastIndexOf('/')) || '/'; directory.length > root.length; directory = directory.slice(0, directory.lastIndexOf('/')) || '/') {
+      const held = marks.get(directory);
+      if (!held || gitRanks[letter] < gitRanks[held]) marks.set(directory, letter);
+    }
+  }
+  return marks;
+}
+
+const gitLabels: Record<string, string> = { M: '已修改', A: '已新增', D: '已删除', R: '已重命名', C: '已复制', T: '类型已更改', U: '未跟踪', '!': '有冲突' };
+
 function Picker(props: NavigationProps & { workspace: string; holder: string }) {
   const { context, file, workspace, holder, navigate } = props;
   const [entries, setEntries] = useState(new Map<string, DirectoryEntry[]>());
@@ -395,14 +460,15 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
   // Columns to read again: one is read again when the machine reports a change in it, and the listing already on
   // screen stays until the new one is in, so a directory that changes often does not blink.
   const [stale, setStale] = useState(new Set<string>());
+  const [git, setGit] = useState<{ workspace: string; marks: Map<string, string> }>();
   const pane = useRef<HTMLDivElement>(null);
   const directories = chain(file, workspace);
   const reload = () => setStale(new Set(directories));
   useEffect(() => {
     let alive = true;
     setError('');
-    for (const directory of directories) {
-      if (entries.has(directory) && !stale.has(directory)) continue;
+    const reading = directories.filter((directory) => !entries.has(directory) || stale.has(directory));
+    for (const directory of reading) {
       void context.ui.request<{ path: string; entries: DirectoryEntry[] }>('list', { machine: file.machine, path: directory })
         .then((listing) => {
           if (!alive) return;
@@ -417,6 +483,11 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
         })
         .catch((problem: Error) => { if (alive) setError(problem.message); });
     }
+    // One read covers the whole repository, so it is asked for at most once per pass; a workspace the marks were not
+    // read for is read even when its columns are cached, since the marks belong to the workspace and not to them.
+    if (workspace && (reading.length || git?.workspace !== workspace)) void context.ui.request<GitStatus | null>('git-status', { machine: file.machine, path: workspace })
+      .then((status) => { if (alive) setGit({ workspace, marks: status ? markFolders(status) : new Map() }); })
+      .catch(() => { if (alive) setGit({ workspace, marks: new Map() }); });
     return () => { alive = false; };
   }, [context, file, workspace, stale]);
   // A reload keeps the watch: it follows the same chain, and giving it up would lose the changes that arrive while
@@ -443,10 +514,12 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
           return <nav key={directory} className="file-column" aria-label={directory}>
             {listing?.map((entry) => {
               const path = `${directory === '/' ? '' : directory}/${entry.name}`;
-              return <button key={entry.name} title={entry.name} aria-current={path === opened || undefined} onClick={() => navigate({ type: entry.isDirectory ? 'directory' : 'file', machine: file.machine, path })}>
+              const mark = git?.workspace === workspace ? git.marks.get(path) : undefined;
+              const badge = mark && !entry.isDirectory ? mark : undefined;
+              return <button key={entry.name} title={badge ? `${entry.name} · ${gitLabels[badge]}` : entry.name} data-git={mark} aria-current={path === opened || undefined} onClick={() => navigate({ type: entry.isDirectory ? 'directory' : 'file', machine: file.machine, path })}>
                 <svg className="file-icon" data-kind={entry.isDirectory ? 'folder' : 'file'} aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4">
                   {entry.isDirectory ? <path d="M2 5h6l2 2h8v10H2z" /> : <path d="M5 2h6l4 4v12H5z M11 2v5h4 M8 11h4 M8 14h4" />}
-                </svg><span>{entry.name}{entry.isDirectory ? '/' : ''}</span>
+                </svg><span className="file-name">{entry.name}{entry.isDirectory ? '/' : ''}</span>{badge && <span className="file-git" aria-hidden="true">{badge}</span>}
               </button>;
             })}
             {listing?.length === 0 && <div className="file-message">空目录</div>}

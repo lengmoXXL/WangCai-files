@@ -2,7 +2,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type { MachineConnection, Process } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
-import { imageMime, machineKey, type FileClick, type History, type LspData, type Settings } from './shared';
+import { imageMime, machineKey, type FileClick, type GitHunk, type GitLetter, type GitStatus, type History, type LspData, type Settings } from './shared';
 
 // Fields this plugin takes from init.ts.
 export const config = {
@@ -30,6 +30,46 @@ const languageServers: Record<string, LanguageServer> = {
   python: { commands: [['pyright-langserver', '--stdio'], ['pylsp']], markers: ['pyproject.toml', 'setup.py', 'requirements.txt'] },
   shell: { commands: [['bash-language-server', 'start']], markers: [] },
 };
+
+// `git status --porcelain=v2 -z`, read the way VS Code paints a change: one badge per path, and the working tree's
+// side winning over the index's, so a file staged and edited again reads as modified rather than added.
+function readStatus(stdout: string): Record<string, GitLetter> {
+  const states: Record<string, GitLetter> = {};
+  const fields = stdout.split('\0');
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    if (field.startsWith('? ')) states[field.slice(2)] = 'U';
+    // An unmerged path is a conflict whatever its two sides say.
+    else if (field.startsWith('u ')) states[field.split(' ').slice(10).join(' ')] = '!';
+    else if (field[0] === '1' || field[0] === '2') {
+      const parts = field.split(' ');
+      const [index, worktree] = parts[1];
+      const path = parts.slice(field[0] === '1' ? 8 : 9).join(' ');
+      // A rename's record is followed by the path it came from, which is a field of its own in this format.
+      if (field[0] === '2') i++;
+      states[path] = (worktree === '.' ? index : worktree) as GitLetter;
+    }
+  }
+  return states;
+}
+
+function readHunks(patch: string): GitHunk[] {
+  const hunks: GitHunk[] = [];
+  for (const line of patch.split('\n')) {
+    const header = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (header) { hunks.push({ newStart: Number(header[1]), lines: [] }); continue; }
+    const hunk = hunks[hunks.length - 1];
+    if (!hunk) continue;
+    if (line.startsWith('+')) hunk.lines.push('added');
+    else if (line.startsWith('-')) hunk.lines.push('removed');
+    else if (line.startsWith(' ')) hunk.lines.push('context');
+  }
+  return hunks;
+}
+
+// A git run over a connection, with the index lock off so reading never takes the lock a writer wants.
+const git = (connection: MachineConnection, cwd: string, args: string[]) =>
+  connection.subprocess.exec('git', args, { cwd, env: { GIT_OPTIONAL_LOCKS: '0' } });
 
 export function activate(context: MainContext) {
   const pending = new Set<AbortController>();
@@ -124,6 +164,43 @@ export function activate(context: MainContext) {
       catch { throw new Error('暂不支持二进制或非 UTF-8 文件'); }
       if (/[\x00-\x08\x0b\x0e-\x1f]/.test(text)) throw new Error('暂不支持二进制文件');
       return text;
+    })));
+
+  // What git paints for the directory a picker shows: `status` answers with paths relative to the repository
+  // root, so one reading covers the whole repository rather than just the directory asked about.
+  handlers.push(context.ui.handle('git-status', ({ machine, path }: { machine: FileClick['machine']; path: string }) =>
+    withConnection(machine, async (connection): Promise<GitStatus | null> => {
+      try {
+        const top = await git(connection, path, ['rev-parse', '--show-toplevel']);
+        if (top.code !== 0) return null;
+        const root = Buffer.from(top.stdout).toString('utf8').trim();
+        const status = await git(connection, path, ['status', '--porcelain=v2', '-z', '--untracked-files=all']);
+        if (status.code !== 0) return null;
+        return { root, states: readStatus(Buffer.from(status.stdout).toString('utf8')) };
+      } catch {
+        // A machine without git, or a directory the command cannot run in, is just a picker with no marks.
+        return null;
+      }
+    })));
+
+  // The lines a file's uncommitted changes added or removed: VS Code's gutter compares the working tree with the
+  // index, so a staged change takes its marks away.
+  handlers.push(context.ui.handle('git-lines', ({ machine, path }: { machine: FileClick['machine']; path: string }) =>
+    withConnection(machine, async (connection): Promise<GitHunk[] | null> => {
+      try {
+        const top = await git(connection, posix.dirname(path), ['rev-parse', '--show-toplevel']);
+        if (top.code !== 0) return null;
+        const root = Buffer.from(top.stdout).toString('utf8').trim();
+        if (!path.startsWith(`${root}/`)) return null;
+        const relative = path.slice(root.length + 1);
+        // A file git does not track has no index version for the lines to be compared with.
+        if ((await git(connection, root, ['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', relative])).code !== 0) return null;
+        const patch = await git(connection, root, ['--literal-pathspecs', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U3', '--', relative]);
+        if (patch.code !== 0) return null;
+        return readHunks(Buffer.from(patch.stdout).toString('utf8'));
+      } catch {
+        return null;
+      }
     })));
 
   // One watch set per tab: the window keeps a tab per workspace, and a tab that stops showing something must not stop

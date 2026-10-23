@@ -12,6 +12,14 @@ export type LspData = { session: string; data: string };
 export type LspLog = { session: string; text: string };
 export type LspExit = { session: string; code?: number };
 
+// VS Code's decoration letters: git's M/A/D/R/C/T, with 'U' for untracked and '!' for a conflict.
+export type GitLetter = 'M' | 'A' | 'D' | 'R' | 'C' | 'T' | 'U' | '!';
+export type GitStatus = { root: string; states: Record<string, GitLetter> };
+
+// One hunk of a file's diff against the index: the kind of each line the patch prints, and where the hunk starts in
+// the file on disk. A 'context' line is one the change left alone.
+export type GitHunk = { newStart: number; lines: ('context' | 'removed' | 'added')[] };
+
 // The identity of a machine: the id, plus the host that tells two machines with one id apart.
 export const machineKey = (machine: FileClick['machine']) => `${machine.id}|${machine.host ?? ''}`;
 
