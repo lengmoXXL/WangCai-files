@@ -177,10 +177,10 @@ function lineStates(hunks: GitHunk[], lineCount: number) {
 const gitLineLabels = { added: '已新增', modified: '已修改', deleted: '已删除' };
 
 // The block a gutter mark stands for: its own lines diffed in a peek, the way a language server's jump opens one.
-function DiffPeek({ path, change, x, y, close }: { path: string; change: GitMark; x: number; y: number; close: () => void }) {
+function DiffPeek({ path, change, area, rowTop, close }: { path: string; change: GitMark; area: DOMRect; rowTop: number; close: () => void }) {
   const shell = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
-  // The editor decides the peek's size, so it is built and placed before the first paint.
+  // A row is only as tall as the editor makes it, so the block is built before the first paint.
   useLayoutEffect(() => {
     const language = languageFor(path);
     const original = monaco.editor.createModel(change.hunk.lines.filter(({ kind }) => kind !== 'added').map(({ text }) => text).join('\n'), language);
@@ -191,20 +191,23 @@ function DiffPeek({ path, change, x, y, close }: { path: string; change: GitMark
       fontSize: font.size, fontFamily: font.family, lineHeight: editorLineHeight,
     });
     editor.setModel({ original, modified });
-    // An inline diff gives every line of the hunk a row, and style.css caps a block taller than the peek.
+    // An inline diff gives every line of the hunk a row, and a block taller than the page scrolls inside the peek.
     const body = content.current!;
     body.style.height = `${change.hunk.lines.length * editor.getModifiedEditor().getOption(monaco.editor.EditorOption.lineHeight)}px`;
-    // The panel hangs off the click, and only it knows the size style.css gave it, so it is what keeps itself on screen.
-    const panel = shell.current!;
-    panel.style.left = `${Math.max(8, Math.min(x, innerWidth - panel.offsetWidth - 8))}px`;
-    panel.style.top = `${Math.max(8, Math.min(y, innerHeight - panel.offsetHeight - 8))}px`;
     return () => {
       editor.dispose();
       original.dispose();
       modified.dispose();
     };
-  }, [change, path, x, y]);
-  return <div className="git-peek" ref={shell} role="dialog" aria-label="行变更">
+  }, [change, path]);
+  // A new area moves the peek, and the block it shows is left as it is.
+  useLayoutEffect(() => {
+    const panel = shell.current!;
+    // A row with no room left below it rides the peek up rather than past the page's bottom edge.
+    panel.style.top = `${Math.max(area.top, Math.min(rowTop, area.bottom - panel.offsetHeight))}px`;
+  }, [area, rowTop]);
+  // The peek takes the page's own box, which is what lines it up with the files page edge to edge.
+  return <div className="git-peek" ref={shell} role="dialog" aria-label="行变更" style={{ left: area.left, width: area.width, maxHeight: area.height }}>
     <div className="git-peek-head">
       <span>{gitLineLabels[change.kind]} · 第 {change.line} 行</span>
       <button type="button" aria-label="关闭行变更" title="关闭" onClick={close}>×</button>
@@ -230,16 +233,39 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
   // The marks of the decorations on screen, which is what a gutter click resolves against.
   const marks = useRef<GitMark[]>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; actions: typeof lspActions }>();
-  const [peek, setPeek] = useState<{ x: number; y: number; change: GitMark }>();
+  const [peek, setPeek] = useState<{ area: DOMRect; rowTop: number; change: GitMark }>();
   // A layer over the editor takes the caret with it, so closing one hands the caret back.
   const closeMenu = () => { setMenu(undefined); control.current?.focus(); };
   const closePeek = () => { setPeek(undefined); control.current?.focus(); };
+  // A line's offset is a content coordinate, so the page's own top and the current scroll are what turn it into a
+  // viewport one.
+  const placePeek = (change: GitMark) => {
+    const editor = control.current!;
+    const area = element.current!.getBoundingClientRect();
+    return { area, rowTop: area.top + editor.getTopForLineNumber(change.line) - editor.getScrollTop() };
+  };
   useEffect(() => {
     if (!peek) return;
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') closePeek(); };
     addEventListener('keydown', escape);
     return () => removeEventListener('keydown', escape);
-  }, [peek]);
+  }, [peek?.change]);
+  // The page resizes with the window, and the peek covers it, so the peek is placed again whenever it does.
+  useEffect(() => {
+    if (!peek) return;
+    const observer = new ResizeObserver(() => setPeek((current) => current && { ...placePeek(current.change), change: current.change }));
+    observer.observe(element.current!);
+    return () => observer.disconnect();
+  }, [peek?.change]);
+  // The peek shows one block of the code view, so it goes when that block is gone, has changed, or the code view is
+  // left. A repository event elsewhere only reads the marks again, so the block on show is compared by content and an
+  // unchanged one keeps its peek open.
+  useEffect(() => {
+    if (!peek) return;
+    const shown = JSON.stringify(peek.change.hunk);
+    if (mode === 'text' && hunks.some((hunk) => JSON.stringify(hunk) === shown)) return;
+    setPeek(undefined);
+  }, [hunks, mode]);
   useEffect(() => {
     if (mode !== 'text') return;
     const language = languageFor(file.path);
@@ -276,7 +302,7 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
       const change = marks.current.find((mark) => mark.line === event.target.position?.lineNumber);
       if (!change) return;
       event.event.preventDefault();
-      setPeek({ x: event.event.posx, y: event.event.posy, change });
+      setPeek({ ...placePeek(change), change });
     });
     let alive = true;
     void services?.open({ machine: file.machine, path: file.path, language, model, navigate, notify: (reason) => { if (alive) notify(reason); } });
@@ -333,7 +359,7 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
           }}>{label}</button>)}
       </div>
     </>}
-    {peek && <DiffPeek path={file.path} change={peek.change} x={peek.x} y={peek.y} close={closePeek} />}
+    {peek && <DiffPeek path={file.path} change={peek.change} area={peek.area} rowTop={peek.rowTop} close={closePeek} />}
   </>;
 }
 

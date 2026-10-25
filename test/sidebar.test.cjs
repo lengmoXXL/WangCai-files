@@ -80,7 +80,8 @@ test('view menu switches plugins and handles empty and closed terminals', { time
       assert.equal(await element.evaluate((element) => getComputedStyle(element).borderRadius), corners);
     }
     // The hairline sits on a shadow or a pseudo-element, so selecting a row or a tab never moves its icon.
-    assert.equal(await selectedRow.evaluate((element) => getComputedStyle(element).boxShadow), 'rgb(51, 53, 54) 0px 0px 0px 1px inset');
+    // A redraw replaces rows as it runs, and a replaced row has no style left to read.
+    await until(async () => (await selectedRow.evaluate((element) => getComputedStyle(element).boxShadow)) === 'rgb(51, 53, 54) 0px 0px 0px 1px inset');
     assert.deepEqual(await selectedTab.evaluate((element) => { const style = getComputedStyle(element, '::after'); return [getComputedStyle(element).outlineWidth, style.borderTopWidth, style.borderTopColor]; }), ['0px', '1px', 'rgb(51, 53, 54)']);
     // The list's own hairline is an overlay, so a row background can never replace that column.
     assert.deepEqual(await left.evaluate((element) => {
