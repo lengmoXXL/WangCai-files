@@ -56,8 +56,8 @@ function readStatus(stdout: string): Record<string, GitLetter> {
 function readHunks(patch: string): GitHunk[] {
   const hunks: GitHunk[] = [];
   for (const line of patch.split('\n')) {
-    const header = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
-    if (header) { hunks.push({ newStart: Number(header[1]), lines: [] }); continue; }
+    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (header) { hunks.push({ oldStart: Number(header[1]), newStart: Number(header[2]), lines: [] }); continue; }
     const hunk = hunks[hunks.length - 1];
     if (!hunk) continue;
     if (line.startsWith('+')) hunk.lines.push({ kind: 'added', text: line.slice(1) });

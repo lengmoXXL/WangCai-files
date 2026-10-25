@@ -191,6 +191,9 @@ function DiffPeek({ path, change, area, rowTop, close }: { path: string; change:
       fontSize: font.size, fontFamily: font.family, lineHeight: editorLineHeight,
     });
     editor.setModel({ original, modified });
+    // The peek prints a hunk rather than the whole file, so both sides count from the line each one starts at.
+    editor.getOriginalEditor().updateOptions({ lineNumbers: (line) => String(change.hunk.oldStart + line - 1) });
+    editor.getModifiedEditor().updateOptions({ lineNumbers: (line) => String(change.hunk.newStart + line - 1) });
     // An inline diff gives every line of the hunk a row, and a block taller than the page scrolls inside the peek.
     const body = content.current!;
     body.style.height = `${change.hunk.lines.length * editor.getModifiedEditor().getOption(monaco.editor.EditorOption.lineHeight)}px`;
