@@ -79,10 +79,9 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     for (const [element, corners] of [[left, '8px 0px 0px 8px'], [selectedRow, '0px'], [selectedTab, '8px 8px 0px 0px']]) {
       assert.equal(await element.evaluate((element) => getComputedStyle(element).borderRadius), corners);
     }
-    // The hairline sits on a pseudo-element, so selecting a row or a tab never moves its icon.
-    for (const element of [selectedRow, selectedTab]) {
-      assert.deepEqual(await element.evaluate((element) => { const style = getComputedStyle(element, '::after'); return [getComputedStyle(element).outlineWidth, style.borderTopWidth, style.borderTopColor]; }), ['0px', '1px', 'rgb(51, 53, 54)']);
-    }
+    // The hairline sits on a shadow or a pseudo-element, so selecting a row or a tab never moves its icon.
+    assert.equal(await selectedRow.evaluate((element) => getComputedStyle(element).boxShadow), 'rgb(51, 53, 54) 0px 0px 0px 1px inset');
+    assert.deepEqual(await selectedTab.evaluate((element) => { const style = getComputedStyle(element, '::after'); return [getComputedStyle(element).outlineWidth, style.borderTopWidth, style.borderTopColor]; }), ['0px', '1px', 'rgb(51, 53, 54)']);
     // The list's own hairline is an overlay, so a row background can never replace that column.
     assert.deepEqual(await left.evaluate((element) => {
       const hairline = getComputedStyle(element, '::after');
@@ -95,17 +94,18 @@ test('view menu switches plugins and handles empty and closed terminals', { time
       nav.style.height = '8px';
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const overflowing = nav.scrollHeight > nav.clientHeight;
-      const flush = Math.round(nav.querySelector('.workspace').getBoundingClientRect().right) === Math.round(pane.getBoundingClientRect().right);
+      // A row stops one pixel short of the pane, which leaves that column to the hairline.
+      const inset = Math.round(pane.getBoundingClientRect().right - nav.querySelector('.workspace').getBoundingClientRect().right) === 1;
       const full = nav.clientWidth === nav.offsetWidth;
       nav.style.cssText = '';
-      return [overflowing, full, flush];
+      return [overflowing, full, inset];
     }), [true, true, true]);
     // A redraw of the list replaces its rows and takes their focus with them, so every attempt focuses a row
     // again and reads the style at once rather than after an interval a redraw could use.
     await until(async () => (await workspaces.first().evaluate((element) => {
       const style = getComputedStyle(element);
-      return [getComputedStyle(element, '::after').borderTopWidth, `${style.outlineWidth} ${style.outlineColor}`];
-    })).join() === '1px,2px rgb(57, 148, 188)', {
+      return `${style.outlineWidth} ${style.outlineColor}`;
+    })) === '2px rgb(57, 148, 188)', {
       attempts: 60, interval: 0,
       // Programmatic focus does not match :focus-visible; keyboard input does.
       act: async () => { await workspaces.first().focus(); await page.keyboard.press('Shift'); },

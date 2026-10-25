@@ -1,7 +1,6 @@
 const { execFileSync } = require('node:child_process');
 const assert = require('node:assert/strict');
 const { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } = require('node:fs');
-const { homedir } = require('node:os');
 const { join, resolve } = require('node:path');
 
 // The app runs in place, so the adjacent WangCai checkout must already be built.
@@ -13,17 +12,18 @@ exports.wangcaiApp = () => {
 };
 
 // Core is what the app installs and builds into a home, so a case that started from an empty one would clone and
-// build it on every run. The developer's prepared build is copied in instead; WANGCAI_CORE_SOURCE names another.
-const coreSource = process.env.WANGCAI_CORE_SOURCE ?? join(homedir(), '.wangcai-dev/.local/share/wangcai/core-src');
+// build it on every run. The prepared checkout next to this repository is installed instead; WANGCAI_CORE_SOURCE
+// names another.
+const coreSource = process.env.WANGCAI_CORE_SOURCE ?? resolve(__dirname, '../../WangCai-Core');
 
+// Where the app reads an installed Core: the clone it keeps under `plugins`, with the build beside it.
 const installCore = (home) => {
   const build = join(coreSource, 'dist');
   if (!existsSync(join(build, 'main.cjs'))) throw new Error(`no Core build at ${build}: build the checkout at ${coreSource}, or set WANGCAI_CORE_SOURCE to one that is built`);
-  const storage = join(home, '.local/share/wangcai');
-  mkdirSync(storage, { recursive: true });
-  cpSync(build, join(storage, 'core'), { recursive: true });
-  // The snapshot an agent reads is taken from these sources, so a case gets them as the app's own install would.
-  for (const entry of ['main', 'ui']) cpSync(join(coreSource, entry), join(storage, 'core-src', entry), { recursive: true });
+  const core = join(home, '.local/share/wangcai/plugins/core');
+  cpSync(build, join(core, 'dist'), { recursive: true });
+  // The snapshot an agent reads is taken from the sources beside the build, so a case gets them as an install would.
+  for (const entry of ['main', 'ui']) cpSync(join(coreSource, entry), join(core, entry), { recursive: true });
 };
 
 exports.testEnv = (home) => {
