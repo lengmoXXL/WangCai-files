@@ -15,13 +15,14 @@ import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbol
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { LanguageServices, buffer, languageFor, ownProviders } from './lsp';
-import { imageMime, machineKey, type FileClick, type Font, type GitHunk, type GitStatus, type History, type HistoryEntry, type Position, type Settings } from './shared';
+import { imageMime, machineKey, type FileClick, type Font, type GitHunk, type GitLines, type GitStatus, type History, type HistoryEntry, type Position, type Settings } from './shared';
 import './style.css';
 
 export const title = '文件';
 let activeWorkspaceId: string | undefined;
 let preview: { url: string; message: string };
 let font: Font;
+let editorLineHeight = 0;
 const histories = new Map<string, History>();
 // The window's language servers, which mount() starts and every tab shares.
 let services: LanguageServices | undefined;
@@ -142,22 +143,25 @@ const lspActions = [
   { method: ownProviders.referencesProvider, action: 'editor.action.referenceSearch.trigger', label: '查找引用' },
 ];
 
+// A gutter mark, carrying the hunk a click on it opens.
+type GitMark = { line: number; kind: 'added' | 'modified' | 'deleted'; hunk: GitHunk };
+
 // The gutter states a diff implies: removed lines paired with added ones read as a modification, and whatever is left
 // over is an addition, or a deletion marked on the line that now follows it.
 function lineStates(hunks: GitHunk[], lineCount: number) {
-  const states: { line: number; kind: 'added' | 'modified' | 'deleted' }[] = [];
+  const states: GitMark[] = [];
   for (const hunk of hunks) {
     let line = hunk.newStart;
     let block: { start: number; removed: number; added: number } | undefined;
     const flush = () => {
       if (!block) return;
       const paired = Math.min(block.removed, block.added);
-      for (let index = 0; index < paired; index++) states.push({ line: block.start + index, kind: 'modified' });
-      for (let index = paired; index < block.added; index++) states.push({ line: block.start + index, kind: 'added' });
-      if (block.removed > block.added) states.push({ line: Math.min(block.start + block.added, lineCount), kind: 'deleted' });
+      for (let index = 0; index < paired; index++) states.push({ line: block.start + index, kind: 'modified', hunk });
+      for (let index = paired; index < block.added; index++) states.push({ line: block.start + index, kind: 'added', hunk });
+      if (block.removed > block.added) states.push({ line: Math.min(block.start + block.added, lineCount), kind: 'deleted', hunk });
       block = undefined;
     };
-    for (const kind of hunk.lines) {
+    for (const { kind } of hunk.lines) {
       if (kind === 'context') { flush(); line++; }
       else {
         if (!block) block = { start: line, removed: 0, added: 0 };
@@ -168,6 +172,45 @@ function lineStates(hunks: GitHunk[], lineCount: number) {
     flush();
   }
   return states;
+}
+
+const gitLineLabels = { added: '已新增', modified: '已修改', deleted: '已删除' };
+
+// The block a gutter mark stands for: its own lines diffed in a peek, the way a language server's jump opens one.
+function DiffPeek({ path, change, x, y, close }: { path: string; change: GitMark; x: number; y: number; close: () => void }) {
+  const shell = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  // The editor decides the peek's size, so it is built and placed before the first paint.
+  useLayoutEffect(() => {
+    const language = languageFor(path);
+    const original = monaco.editor.createModel(change.hunk.lines.filter(({ kind }) => kind !== 'added').map(({ text }) => text).join('\n'), language);
+    const modified = monaco.editor.createModel(change.hunk.lines.filter(({ kind }) => kind !== 'removed').map(({ text }) => text).join('\n'), language);
+    const editor = monaco.editor.createDiffEditor(content.current!, {
+      readOnly: true, renderSideBySide: false, minimap: { enabled: false }, renderOverviewRuler: false,
+      scrollBeyondLastLine: false, automaticLayout: true, theme: 'wangcai',
+      fontSize: font.size, fontFamily: font.family, lineHeight: editorLineHeight,
+    });
+    editor.setModel({ original, modified });
+    // An inline diff gives every line of the hunk a row, and style.css caps a block taller than the peek.
+    const body = content.current!;
+    body.style.height = `${change.hunk.lines.length * editor.getModifiedEditor().getOption(monaco.editor.EditorOption.lineHeight)}px`;
+    // The panel hangs off the click, and only it knows the size style.css gave it, so it is what keeps itself on screen.
+    const panel = shell.current!;
+    panel.style.left = `${Math.max(8, Math.min(x, innerWidth - panel.offsetWidth - 8))}px`;
+    panel.style.top = `${Math.max(8, Math.min(y, innerHeight - panel.offsetHeight - 8))}px`;
+    return () => {
+      editor.dispose();
+      original.dispose();
+      modified.dispose();
+    };
+  }, [change, path, x, y]);
+  return <div className="git-peek" ref={shell} role="dialog" aria-label="行变更">
+    <div className="git-peek-head">
+      <span>{gitLineLabels[change.kind]} · 第 {change.line} 行</span>
+      <button type="button" aria-label="关闭行变更" title="关闭" onClick={close}>×</button>
+    </div>
+    <div className="git-peek-body" ref={content} />
+  </div>;
 }
 
 function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; notify: (reason: string) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember }) {
@@ -184,12 +227,21 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
     return () => removeEventListener('message', deliver);
   }, [mode, text]);
   const control = useRef<monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
+  // The marks of the decorations on screen, which is what a gutter click resolves against.
+  const marks = useRef<GitMark[]>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; actions: typeof lspActions }>();
-  // The menu is the one thing that takes the caret out of the editor, so closing it hands the caret back.
+  const [peek, setPeek] = useState<{ x: number; y: number; change: GitMark }>();
+  // A layer over the editor takes the caret with it, so closing one hands the caret back.
   const closeMenu = () => { setMenu(undefined); control.current?.focus(); };
+  const closePeek = () => { setPeek(undefined); control.current?.focus(); };
+  useEffect(() => {
+    if (!peek) return;
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') closePeek(); };
+    addEventListener('keydown', escape);
+    return () => removeEventListener('keydown', escape);
+  }, [peek]);
   useEffect(() => {
     if (mode !== 'text') return;
-    const size = font.size;
     const language = languageFor(file.path);
     // A file shown from another machine is the same model.
     const model = buffer(monaco.Uri.file(file.path), language, text);
@@ -197,7 +249,7 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
     const editor = monaco.editor.create(element.current!, {
       model, theme: 'wangcai', readOnly: true, domReadOnly: true,
       automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false,
-      fontSize: size, lineHeight: font.lineHeight ? Math.round(size * font.lineHeight) : 0, fontFamily: font.family, lineNumbersMinChars: 3, renderLineHighlight: 'none',
+      fontSize: font.size, lineHeight: editorLineHeight, fontFamily: font.family, lineNumbersMinChars: 3, renderLineHighlight: 'none',
       ariaLabel: '代码预览', contextmenu: false,
     });
     control.current = editor;
@@ -218,6 +270,14 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
     const scrolled = editor.onDidScrollChange(() => remember(file, { top: editor.getScrollTop() }));
     const moved = editor.onDidChangeCursorPosition(({ position }) => remember(file, { line: position.lineNumber, column: position.column }));
     const laidOut = editor.onDidLayoutChange(restoreTop);
+    const opened = editor.onMouseDown((event) => {
+      // A click on a gutter mark opens the block it stands for.
+      if (event.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS) return;
+      const change = marks.current.find((mark) => mark.line === event.target.position?.lineNumber);
+      if (!change) return;
+      event.event.preventDefault();
+      setPeek({ x: event.event.posx, y: event.event.posy, change });
+    });
     let alive = true;
     void services?.open({ machine: file.machine, path: file.path, language, model, navigate, notify: (reason) => { if (alive) notify(reason); } });
     const host = element.current!;
@@ -240,7 +300,7 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
       alive = false;
       host.removeEventListener('contextmenu', openMenu);
       control.current = undefined;
-      scrolled.dispose(); moved.dispose(); laidOut.dispose(); editor.dispose(); onModel(undefined);
+      scrolled.dispose(); moved.dispose(); laidOut.dispose(); opened.dispose(); editor.dispose(); onModel(undefined);
     };
   }, [file, text, mode, remember]);
   // Git can report new marks without the text changing, so they are applied whenever the read returns them.
@@ -248,7 +308,9 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
     const editor = control.current;
     const model = editor?.getModel();
     if (!editor || !model) return;
-    const decoration = editor.createDecorationsCollection(lineStates(hunks, model.getLineCount()).map(({ line, kind }) => ({
+    // A decoration carries a class name rather than the change behind it, so the marks are kept for the click to find.
+    marks.current = lineStates(hunks, model.getLineCount());
+    const decoration = editor.createDecorationsCollection(marks.current.map(({ line, kind }) => ({
       range: new monaco.Range(line, 1, line, 1),
       options: { linesDecorationsClassName: `git-line-${kind}` },
     })));
@@ -271,6 +333,7 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
           }}>{label}</button>)}
       </div>
     </>}
+    {peek && <DiffPeek path={file.path} change={peek.change} x={peek.x} y={peek.y} close={closePeek} />}
   </>;
 }
 
@@ -385,18 +448,29 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember 
   const modes: Mode[] = image ? [] : ['text', ...(markdown ? ['markdown' as const] : []), ...(html ? ['html' as const] : [])];
   useEffect(() => {
     let alive = true;
+    let stop: () => void;
+    let root = '';
     setText(undefined); setError(''); setNotice(''); setHunks([]);
     const read = () => {
       void context.ui.request<string>('read', file).then((text) => { if (alive) { setText(text); setError(''); } })
         .catch((error: Error) => { if (alive) setError(error.message); });
       // The marks describe this text, so they are read with it; an image is a data URL with no lines to mark.
-      if (!image) void context.ui.request<GitHunk[] | null>('git-lines', { machine: file.machine, path: file.path })
-        .then((lines) => { if (alive) setHunks(lines ?? []); })
+      if (image) return;
+      void context.ui.request<GitLines | null>('git-lines', { machine: file.machine, path: file.path })
+        .then((lines) => {
+          if (!alive) return;
+          setHunks(lines?.hunks ?? []);
+          // A commit or a stage takes the marks away without touching the file, so the repository is watched too.
+          if (!lines || lines.root === root) return;
+          root = lines.root;
+          stop();
+          stop = watch(context, file.machine, holder, [file.path, `${root}/.git`], read);
+        })
         .catch(() => { if (alive) setHunks([]); });
     };
+    stop = watch(context, file.machine, holder, [file.path], read);
     read();
-    const unwatch = watch(context, file.machine, holder, [file.path], read);
-    return () => { alive = false; unwatch(); };
+    return () => { alive = false; stop(); };
   }, [context, file, holder]);
   const [mode, setMode] = useState<Mode>(html ? 'html' : markdown ? 'markdown' : 'text');
   const [model, setModel] = useState<monaco.editor.ITextModel>();
@@ -460,10 +534,13 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
   // Columns to read again: one is read again when the machine reports a change in it, and the listing already on
   // screen stays until the new one is in, so a directory that changes often does not blink.
   const [stale, setStale] = useState(new Set<string>());
-  const [git, setGit] = useState<{ workspace: string; marks: Map<string, string> }>();
+  // Marks move with anything on disk, a column or the repository, so their read counts the changes this watch reports.
+  const [changes, setChanges] = useState(0);
+  const [git, setGit] = useState<{ workspace: string; root: string; marks: Map<string, string> }>();
   const pane = useRef<HTMLDivElement>(null);
   const directories = chain(file, workspace);
-  const reload = () => setStale(new Set(directories));
+  // A reload reads the columns again and asks for the marks again, since it is what a missed change is repaired with.
+  const reload = () => { setStale(new Set(directories)); setChanges((count) => count + 1); };
   useEffect(() => {
     let alive = true;
     setError('');
@@ -483,16 +560,25 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
         })
         .catch((problem: Error) => { if (alive) setError(problem.message); });
     }
-    // One read covers the whole repository, so it is asked for at most once per pass; a workspace the marks were not
-    // read for is read even when its columns are cached, since the marks belong to the workspace and not to them.
-    if (workspace && (reading.length || git?.workspace !== workspace)) void context.ui.request<GitStatus | null>('git-status', { machine: file.machine, path: workspace })
-      .then((status) => { if (alive) setGit({ workspace, marks: status ? markFolders(status) : new Map() }); })
-      .catch(() => { if (alive) setGit({ workspace, marks: new Map() }); });
     return () => { alive = false; };
   }, [context, file, workspace, stale]);
+  // The marks belong to the repository rather than to the columns, so they are read in a request of their own.
+  useEffect(() => {
+    if (!workspace) return;
+    let alive = true;
+    void context.ui.request<GitStatus | null>('git-status', { machine: file.machine, path: workspace })
+      .then((status) => { if (alive) setGit({ workspace, root: status?.root ?? '', marks: status ? markFolders(status) : new Map() }); })
+      .catch(() => { if (alive) setGit({ workspace, root: '', marks: new Map() }); });
+    return () => { alive = false; };
+  }, [context, file, workspace, changes]);
   // A reload keeps the watch: it follows the same chain, and giving it up would lose the changes that arrive while
-  // it is gone.
-  useEffect(() => watch(context, file.machine, holder, directories, (path) => setStale((current) => new Set(current).add(path))), [context, file, workspace, holder]);
+  // it is gone. The repository joins it once its root is known.
+  const repository = git?.root ? `${git.root}/.git` : '';
+  useEffect(() => watch(context, file.machine, holder, repository ? [...directories, repository] : directories, (path) => {
+    setChanges((count) => count + 1);
+    // The repository is here for the marks alone, and `stale` holds the columns.
+    if (path !== repository) setStale((current) => new Set(current).add(path));
+  }), [context, file, workspace, holder, repository]);
   // The columns a chain dropped are offered their room again when the chain changes, since another chain packs
   // differently.
   useEffect(() => setDropped(0), [file, workspace]);
@@ -645,6 +731,10 @@ function editorTheme(theme: Theme): monaco.editor.IStandaloneThemeData {
       'editorWidget.background': theme.overlay,
       'editorWidget.border': theme.border,
       'editorGutter.background': theme.background,
+      'diffEditor.insertedLineBackground': alpha(theme.green, 0.12),
+      'diffEditor.removedLineBackground': alpha(theme.red, 0.12),
+      'diffEditor.insertedTextBackground': alpha(theme.green, 0.2),
+      'diffEditor.removedTextBackground': alpha(theme.red, 0.2),
       'scrollbarSlider.background': alpha(theme.muted, 0.25),
       'scrollbarSlider.hoverBackground': alpha(theme.muted, 0.4),
       'scrollbarSlider.activeBackground': alpha(theme.muted, 0.5),
@@ -655,6 +745,7 @@ function editorTheme(theme: Theme): monaco.editor.IStandaloneThemeData {
 export async function mount(_container: HTMLElement, context: UiContext) {
   const profile: Settings = context.host.config;
   font = profile.font;
+  editorLineHeight = font.lineHeight ? Math.round(font.size * font.lineHeight) : 0;
   preview = context.host.preview;
   monaco.editor.defineTheme('wangcai', editorTheme(profile.theme));
   for (const [key, history] of Object.entries(await context.ui.request<Record<string, History>>('history'))) histories.set(key, history);

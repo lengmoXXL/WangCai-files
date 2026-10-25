@@ -4,7 +4,7 @@ const { execFileSync } = require('node:child_process');
 const { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { backButton, cleanup, collectErrors, columnOf, entry, openFilesWorkspace, openWindow, testEnv, until, writeInit } = require('./harness.cjs');
+const { backButton, boxOf, cleanup, collectErrors, columnOf, entry, openFilesWorkspace, openWindow, testEnv, until, writeInit } = require('./harness.cjs');
 
 test('the picker and the editor gutter mark git changes the way VS Code does', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-git-')));
@@ -76,7 +76,29 @@ test('the picker and the editor gutter mark git changes the way VS Code does', {
       await modified.count(),
       await page.locator('.git-line-deleted').count(),
     ], [1, 1, 1]);
+    // A click on a mark opens that block: the same three changes, diffed in a peek of their own.
+    const markBox = await boxOf(modified.first());
+    await page.mouse.click(markBox.x + 3, markBox.y + markBox.height / 2);
+    const peek = page.getByRole('dialog', { name: '行变更' });
+    await peek.waitFor();
+    assert.match(await peek.innerText(), /已修改 · 第 2 行/);
+    // The editor draws a space as a non-breaking one, so the block is matched by shape rather than by exact bytes.
+    await until(async () => /line2\schanged/.test(await peek.innerText()));
+    await page.keyboard.press('Escape');
+    await peek.waitFor({ state: 'hidden' });
+    // Staging the file empties the diff it held, so the gutter clears without the file being opened again.
+    git('add', 'kept.txt');
+    await until(async () => (await page.locator('.git-line-modified').count()) === 0);
+    assert.deepEqual([
+      await page.locator('.git-line-added').count(),
+      await page.locator('.git-line-deleted').count(),
+    ], [0, 0]);
     await backButton(page).click();
+    // A staged change is still a change, so the row keeps its mark until the commit takes it away.
+    await until(async () => (await entry(directory, 'kept.txt').getAttribute('data-git')) === 'M');
+    git('-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'second');
+    await until(async () => (await entry(directory, 'kept.txt').getAttribute('data-git')) === null);
+    assert.equal(await entry(directory, 'kept.txt').locator('.file-git').count(), 0);
     // A level below keeps the marks it has, so a folder is only a way in.
     await entry(directory, 'sub/').click();
     const nested = columnOf(page, join(home, 'sub'));

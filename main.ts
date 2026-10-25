@@ -2,7 +2,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type { MachineConnection, Process } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
-import { imageMime, machineKey, type FileClick, type GitHunk, type GitLetter, type GitStatus, type History, type LspData, type Settings } from './shared';
+import { imageMime, machineKey, type FileClick, type GitHunk, type GitLetter, type GitLines, type GitStatus, type History, type LspData, type Settings } from './shared';
 
 // Fields this plugin takes from init.ts.
 export const config = {
@@ -60,9 +60,9 @@ function readHunks(patch: string): GitHunk[] {
     if (header) { hunks.push({ newStart: Number(header[1]), lines: [] }); continue; }
     const hunk = hunks[hunks.length - 1];
     if (!hunk) continue;
-    if (line.startsWith('+')) hunk.lines.push('added');
-    else if (line.startsWith('-')) hunk.lines.push('removed');
-    else if (line.startsWith(' ')) hunk.lines.push('context');
+    if (line.startsWith('+')) hunk.lines.push({ kind: 'added', text: line.slice(1) });
+    else if (line.startsWith('-')) hunk.lines.push({ kind: 'removed', text: line.slice(1) });
+    else if (line.startsWith(' ')) hunk.lines.push({ kind: 'context', text: line.slice(1) });
   }
   return hunks;
 }
@@ -186,7 +186,7 @@ export function activate(context: MainContext) {
   // The lines a file's uncommitted changes added or removed: VS Code's gutter compares the working tree with the
   // index, so a staged change takes its marks away.
   handlers.push(context.ui.handle('git-lines', ({ machine, path }: { machine: FileClick['machine']; path: string }) =>
-    withConnection(machine, async (connection): Promise<GitHunk[] | null> => {
+    withConnection(machine, async (connection): Promise<GitLines | null> => {
       try {
         const top = await git(connection, posix.dirname(path), ['rev-parse', '--show-toplevel']);
         if (top.code !== 0) return null;
@@ -197,7 +197,7 @@ export function activate(context: MainContext) {
         if ((await git(connection, root, ['--literal-pathspecs', 'ls-files', '--error-unmatch', '--', relative])).code !== 0) return null;
         const patch = await git(connection, root, ['--literal-pathspecs', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U3', '--', relative]);
         if (patch.code !== 0) return null;
-        return readHunks(Buffer.from(patch.stdout).toString('utf8'));
+        return { root, hunks: readHunks(Buffer.from(patch.stdout).toString('utf8')) };
       } catch {
         return null;
       }
