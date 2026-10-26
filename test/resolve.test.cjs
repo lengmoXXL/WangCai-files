@@ -12,7 +12,7 @@ test('address resolution uses the requested machine and directory, and releases 
     ui: { handle(method, handler) { handlers.set(method, handler); return () => handlers.delete(method); } },
     async connect(target, signal) {
       assert.equal(target, machine);
-      assert.equal(signal.aborted, false);
+      assert.ok(!signal.aborted);
       return {
         pty: { async cwd(sessionId) { assert.equal(sessionId, 'session'); return '/work'; } },
         fs: { async stat(path) {
