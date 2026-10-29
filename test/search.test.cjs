@@ -1,9 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { writeFileSync } = require('node:fs');
+const { mkdirSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { codeView, collectErrors, dismissSearch, goToPath, lists, openFilesWorkspace, openSearch, pathBox, search, searchInput, searchPanel, searchRow, submitSearch, waitForLine, waitForPath } = require('./files-ui.cjs');
+const { codeView, collectErrors, dismissSearch, filesEmpty, goToPath, lists, openFilesWorkspace, openSearch, pathBox, search, searchInput, searchMarks, searchNote, searchPanel, searchRow, searchRows, submitSearch, waitForLine, waitForPath } = require('./files-ui.cjs');
 
 test('the search box finds files, text and symbols, and Enter opens what it found', { timeout: 120000 }, () => withWindow('wangcai-files-search', lists, async ({ home, page, errors }) => {
   const main = join(home, 'main.ts');
@@ -26,19 +26,21 @@ test('the search box finds files, text and symbols, and Enter opens what it foun
   // A name is looked for under the workspace's own directory, and Enter opens the file it names.
   await openSearch(page);
   // Nothing is chosen yet: the list marks the row of the entry the tab is on, and the page stays on it.
-  await searchRow(page, 'main.ts').waitFor();
+  const mainRow = searchRow(page, 'main.ts');
+  await mainRow.waitFor();
   // Longer than the picker's rest before it follows a selection, so a page that was going to move has moved.
   await page.waitForTimeout(400);
   assert.equal(await pathBox(page).inputValue(), main);
-  assert.equal(await searchRow(page, 'main.ts').getAttribute('aria-current'), 'true');
+  assert.equal(await mainRow.getAttribute('aria-current'), 'true');
   assert.equal(await searchPanel(page).evaluate((element) => getComputedStyle(element).fontSize), '12px');
   // Typed a letter at a time, with a pause long enough for the page to follow each one: none of that may take the
   // keyboard out of the input.
   await page.keyboard.type('nest', { delay: 150 });
   assert.equal(await searchInput(page).inputValue(), 'nest');
-  await searchRow(page, 'nested-name.ts').waitFor();
+  const nestedRow = searchRow(page, 'nested-name.ts');
+  await nestedRow.waitFor();
   // The row marks the letters it matched, so what put it on the list is visible.
-  assert.ok((await searchRow(page, 'nested-name.ts').locator('b').count()) > 0);
+  assert.ok((await searchMarks(nestedRow)).title.length > 0);
   // The page above the picker follows the chosen row, so the file is there before Enter closes the picker.
   await waitForPath(page, nested);
   assert.equal(await searchPanel(page).count(), 1);
@@ -66,12 +68,54 @@ test('the search box finds files, text and symbols, and Enter opens what it foun
   await searchInput(page).fill('>computeTotal');
   await searchInput(page).fill('@compute');
   await searchRow(page, 'computeTotal').waitFor();
-  assert.equal(await searchPanel(page).locator('.search-note').count(), 0);
+  assert.equal(await searchNote(page).count(), 0);
   await dismissSearch(page);
 
   // The picker is opened again from the header, and Escape leaves without moving the page.
   await openSearch(page);
   await dismissSearch(page);
   assert.equal(await pathBox(page).inputValue(), main);
+
+  // A folder is searched as the row prints it, and each side of the row marks what it matched: here the query runs
+  // through the folder into the name.
+  mkdirSync(join(home, 'deep/dir'), { recursive: true });
+  writeFileSync(join(home, 'deep/dir/path-only.ts'), 'export const only = 1;\n');
+  await search(page, 'dir/path');
+  const pathRow = searchRow(page, 'path-only.ts');
+  await pathRow.waitFor();
+  const pathMarks = await searchMarks(pathRow);
+  assert.deepEqual(pathMarks.detail, ['d', 'i', 'r'], 'dir is marked in the folder');
+  assert.deepEqual(pathMarks.title, ['p', 'a', 't', 'h'], 'path is marked in the name');
+  await dismissSearch(page);
+
+  // A name holding a character outside the basic plane keeps its marks on the letters they belong to: the indexes count
+  // code units, so the emoji's two of them are not letters of their own.
+  writeFileSync(join(home, '📁abc.ts'), 'export const emoji = 1;\n');
+  await search(page, 'abc');
+  const emojiRow = searchRow(page, 'abc.ts');
+  await emojiRow.waitFor();
+  assert.deepEqual((await searchMarks(emojiRow)).title, ['a', 'b', 'c']);
+  assert.equal(await emojiRow.innerText(), '📁abc.ts');
+  await dismissSearch(page);
+
+  // Letters the query finds scattered score below what the page lists, so a weak query reports nothing rather than a
+  // screen of near misses.
+  await openSearch(page);
+  // The list has to be in before the query is typed: an empty list is also what the picker shows while it waits for one.
+  await searchRows(page).first().waitFor();
+  await searchInput(page).fill('nst');
+  await filesEmpty(page).waitFor();
+  assert.equal(await searchRows(page).count(), 0);
+  await dismissSearch(page);
+
+  // A grep answer longer than the page draws is cut where the note says it is: 25 files of 10 matching lines, and 200
+  // rows drawn.
+  for (let index = 0; index < 25; index++) {
+    writeFileSync(join(home, `hits${index}.txt`), Array.from({ length: 10 }, (_, line) => `HIT_${index}_${line}`).join('\n'));
+  }
+  await search(page, '>HIT_');
+  assert.equal(await searchRows(page).count(), 200);
+  assert.match(await searchNote(page).innerText(), /200/);
+  await dismissSearch(page);
   assert.deepEqual(errors, []);
 }));

@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Markdown from 'react-markdown';
-import fuzzysort from 'fuzzysort';
 import remarkGfm from 'remark-gfm';
+import fuzzysort, { type KeysResult } from 'fuzzysort';
 import * as monaco from 'monaco-editor/editor/editor.api.js';
 import 'monaco-editor/basic-languages/monaco.contribution.js';
 import 'monaco-editor/languages/features/json/jsonMode.js';
@@ -670,6 +670,9 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
 
 // How many rows the page draws of a search's answer, and the number the note about a cut list names.
 const rowLimit = 200;
+// How well a match has to score to be listed: a name or path with the query in a run scores .7 and up, letters
+// scattered across one score around .3. A row whose matched side stays under it is left out of either search below.
+const matchThreshold = 0.6;
 
 // What the picker looks for, and the character that asks for each: a file's name, a pattern in the workspace's text, and
 // the symbols of the entry the tab is on.
@@ -679,13 +682,19 @@ const searchLabels: Record<SearchMode, { hint: string; empty: string }> = {
   grep: { hint: '内容', empty: '没有匹配的内容' },
   symbols: { hint: '符号', empty: '没有匹配的符号' },
 };
-// A row of the picker: what it says, and what of a title the query matched, which the row marks.
-type SearchRow = { key: string; title: string; detail?: string; target: FileClick; hit?: ReadonlyArray<number> };
+// A row of the picker: what it says, and which of its characters the query matched, which the row marks.
+type SearchRow = { key: string; title: string; detail?: string; target: FileClick; marks?: ReadonlyArray<number>; detailMarks?: ReadonlyArray<number> };
+// `shown` is the path the row prints. The query is matched against it as printed rather than against the file's own
+// path, so that a marked character lands on the character it matched.
+type FileRow = { shown: string; row: SearchRow };
 
-// A title with the characters the query matched marked, so a row shows why it is on the list.
-const marked = (title: string, hit?: ReadonlyArray<number>) => {
-  const at = new Set(hit);
-  return [...title].map((letter, index) => (at.has(index) ? <b key={index}>{letter}</b> : letter));
+// A text with the characters at those indexes marked, so a row shows why it is on the list. The indexes count UTF-16
+// code units, as fuzzysort reports them, so the text is split the same way rather than by code point; a text with
+// nothing marked is handed back whole, as one node rather than one per character.
+const marked = (text: string, marks?: ReadonlyArray<number>) => {
+  if (!marks?.length) return text;
+  const at = new Set(marks);
+  return text.split('').map((letter, index) => (at.has(index) ? <b key={index}>{letter}</b> : letter));
 };
 
 // The search picker: one input whose first character chooses what it looks for, and the rows it finds under it. The page
@@ -744,40 +753,59 @@ function Search({ context, visited, workspace, peek, navigate, close }: { contex
     }, 150);
     return () => clearTimeout(timer);
   }, [mode, pattern, context, visited.machine, directory]);
-  // The rows the page draws, and how many the query matched before the page kept its share: the ranker stops at the row
-  // limit itself, so a list is cut where it is ranked.
+  // The rows the page draws, and how many the source offered before the page kept its share. Every branch stops at the
+  // row limit.
   const { rows, matched } = useMemo<{ rows: SearchRow[]; matched: number }>(() => {
     const needle = pattern.trim();
     if (mode === 'grep') {
-      const rows = matches.hits.map((hit) => ({
+      const candidates = matches.hits.map((hit) => ({
         key: `${hit.path}:${hit.line}`, title: hit.text || ' ',
         detail: `${hit.path.startsWith(`${directory}/`) ? hit.path.slice(directory.length + 1) : hit.path}:${hit.line}`,
         target: { type: 'file' as const, machine: visited.machine, path: hit.path, line: hit.line, column: hit.column },
       }));
-      return { rows, matched: rows.length };
+      return { rows: candidates.slice(0, rowLimit), matched: candidates.length };
     }
     if (mode === 'symbols') {
-      const symbolRows = (symbols ?? []).map((symbol) => ({
-        name: symbol.name,
-        row: { key: `${symbol.line}:${symbol.column}`, title: symbol.name, detail: symbol.container, target: { type: 'file' as const, machine: visited.machine, path: visited.path, line: symbol.line, column: symbol.column } },
-      }));
-      if (!needle) return { rows: symbolRows.slice(0, rowLimit).map(({ row }) => row), matched: symbolRows.length };
-      const found = fuzzysort.go(needle, symbolRows, { key: 'name', threshold: 0, limit: rowLimit });
-      return { rows: found.map((one) => ({ ...one.obj.row, hit: one.indexes })), matched: found.total };
+      const candidates = (symbols ?? []).map((symbol) => ({ key: `${symbol.line}:${symbol.column}`, title: symbol.name, detail: symbol.container, target: { type: 'file' as const, machine: visited.machine, path: visited.path, line: symbol.line, column: symbol.column } }));
+      if (!needle) return { rows: candidates.slice(0, rowLimit), matched: candidates.length };
+      const found = fuzzysort.go(needle, candidates, { key: 'title', threshold: matchThreshold, limit: rowLimit });
+      return { rows: found.map((one) => ({ ...one.obj, marks: one.indexes })), matched: found.total };
     }
-    const fileRows = (files?.paths ?? []).map((path) => {
+    const candidates = (files?.paths ?? []).map((path) => {
       const name = path.slice(path.lastIndexOf('/') + 1);
       const folder = path.startsWith(`${directory}/`) ? path.slice(directory.length + 1, path.length - name.length - 1) : path.slice(0, path.lastIndexOf('/'));
-      return { name, path, row: { key: path, title: name, detail: folder, target: { type: 'file' as const, machine: visited.machine, path } } };
+      return { shown: folder ? `${folder}/${name}` : name, row: { key: path, title: name, detail: folder, target: { type: 'file' as const, machine: visited.machine, path } } };
     });
-    if (!needle) return { rows: fileRows.slice(0, rowLimit).map(({ row }) => row), matched: fileRows.length };
-    // A name the query matches outranks a path it only matches through a folder, which is why the name is a key of its
-    // own: its score lifts its row above every row the path alone matched.
-    const found = fuzzysort.go(needle, fileRows, {
-      keys: ['name', 'path'], threshold: 0, limit: rowLimit,
-      scoreFn: (one) => (one[0].score > 0 ? 2 + one[0].score : one[1].score),
+    if (!needle) return { rows: candidates.slice(0, rowLimit).map(({ row }) => row), matched: candidates.length };
+    // Which side of a row the query matched well enough to rank it and to mark it: the name, or else the path it sits
+    // on.
+    const byName = (one: KeysResult<FileRow>) => one[0].score >= matchThreshold;
+    // A name match lifts its row a tier above every row only its path matched: a path score cannot pass 1, so the 2
+    // puts it out of reach.
+    const found = fuzzysort.go(needle, candidates, {
+      keys: ['row.title', 'shown'], threshold: matchThreshold, limit: rowLimit,
+      // A shorter path settles a tie inside one tier. The floor only lifts a score that cleared the threshold, so the
+      // nudge cannot push a listed row out, and a weaker match keeps its own score.
+      scoreFn: (one) => {
+        const score = byName(one) ? 2 + one[0].score : one[1].score;
+        return score < matchThreshold ? score : Math.max(matchThreshold, score - one.obj.shown.length / 10000);
+      },
     });
-    return { rows: found.map((one) => ({ ...one.obj.row, hit: one[0].score > 0 ? one[0].indexes : undefined })), matched: found.total };
+    return {
+      rows: found.map((one) => {
+        if (byName(one)) return { ...one.obj.row, marks: one[0].indexes };
+        // A path match is marked on the side of the row it fell on: the folder, the name, or both when the query runs
+        // across the slash between them.
+        const detail = one.obj.row.detail ?? '';
+        const fromName = one.obj.shown.length - one.obj.row.title.length;
+        return {
+          ...one.obj.row,
+          detailMarks: one[1].indexes.filter((at) => at < detail.length),
+          marks: one[1].indexes.filter((at) => at >= fromName).map((at) => at - fromName),
+        };
+      }),
+      matched: found.total,
+    };
   }, [mode, pattern, directory, visited.machine, visited.path, files, matches, symbols]);
   const cutBySource = mode === 'grep' ? matches.truncated : mode === 'files' ? files?.truncated ?? false : false;
   const cut = matched > rowLimit || cutBySource;
@@ -811,8 +839,8 @@ function Search({ context, visited, workspace, peek, navigate, close }: { contex
     {note && <div className="search-note">{note}</div>}
     <div className="search-list" ref={list}>
       {rows.map((row, index) => <button key={row.key} type="button" className="search-row" aria-current={index === at || undefined} onClick={() => navigate(row.target)} onMouseEnter={() => setChosen(index)}>
-        <span className="search-title">{marked(row.title, row.hit)}</span>
-        {row.detail && <span className="search-detail">{row.detail}</span>}
+        <span className="search-title">{marked(row.title, row.marks)}</span>
+        {row.detail && <span className="search-detail">{marked(row.detail, row.detailMarks)}</span>}
       </button>)}
       {!rows.length && <div className="file-message">{searchLabels[mode].empty}</div>}
     </div>

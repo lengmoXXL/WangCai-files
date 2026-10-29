@@ -85,7 +85,7 @@
 .search-row[aria-current] { background: var(--wc-selection); }
 .search-row:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
 .search-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search-title b { color: var(--wc-accent); font-weight: 600; }
+.search-row b { color: var(--wc-accent); font-weight: 600; }
 .search-detail { flex-shrink: 0; max-width: 60%; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--wc-muted); }
 
 /* VS Code's gutter: a bar for a changed line, a triangle where lines went away. */
