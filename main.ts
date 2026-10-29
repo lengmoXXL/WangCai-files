@@ -2,7 +2,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type { MachineConnection, Process } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
-import { imageMime, machineKey, type FileClick, type GitHunk, type GitLetter, type GitLines, type GitStatus, type History, type LspData, type Settings } from './shared';
+import { imageMime, machineKey, type FileClick, type GitHunk, type GitLetter, type GitLines, type GitStatus, type History, type LspData, type SearchHit, type Settings } from './shared';
 
 // Fields this plugin takes from init.ts.
 export const config = {
@@ -112,6 +112,23 @@ export function activate(context: MainContext) {
     }
   };
 
+  // One line of `rg --json` output: what kind of event it is — a match among others — the path it was found in, the line
+  // it sits on with that line's text, and where in the line its hits start.
+  type RgEvent = { type: string; data: { path?: { text: string }; line_number?: number; lines?: { text: string }; submatches?: { start: number }[] } };
+
+  // How many lines a grep answer carries: the page draws fewer than this, and whether more were found is all it hears.
+  const grepCeiling = 500;
+  // How many paths a listing carries: the page ranks the whole list before it draws any of it, so this only keeps one
+  // answer from being a repository's worth of paths.
+  const pathCeiling = 20000;
+
+  // A rg run over a connection, looked up the way a language server is: the daemon's own PATH may not hold it.
+  const rg = async (connection: MachineConnection, machine: FileClick['machine'], cwd: string, args: string[]) => {
+    const located = await locate(connection, machine, [['rg']], cwd);
+    if (!located) throw new Error('未找到 rg 命令，无法搜索');
+    return connection.subprocess.exec(located.command, args, { cwd, env: { PATH: located.path } });
+  };
+
   // The server a language runs here: the built-in one, with whatever init.ts says about that language on top.
   const serverFor = (language: string): LanguageServer | undefined => {
     const override = settings.lsp?.[language];
@@ -201,6 +218,38 @@ export function activate(context: MainContext) {
       } catch {
         return null;
       }
+    })));
+
+  // The paths a file search offers: what rg lists under a workspace, which leaves out what git ignores.
+  handlers.push(context.ui.handle('find-files', ({ machine, path }: { machine: FileClick['machine']; path: string }) =>
+    withConnection(machine, async (connection) => {
+      const listed = await rg(connection, machine, path, ['--files', '--color', 'never']);
+      if (listed.code !== 0) throw new Error(Buffer.from(listed.stderr).toString('utf8').trim() || '文件列表读取失败');
+      const files = Buffer.from(listed.stdout).toString('utf8').split('\n').filter(Boolean);
+      return { files: files.slice(0, pathCeiling).map((file) => posix.resolve(path, file)), truncated: files.length > pathCeiling };
+    })));
+
+  // A pattern's matches under a workspace, one row per line that holds it. rg is asked for JSON because a match then
+  // carries the byte offsets of its hits.
+  handlers.push(context.ui.handle('grep', ({ machine, path, query }: { machine: FileClick['machine']; path: string; query: string }) =>
+    withConnection(machine, async (connection) => {
+      const found = await rg(connection, machine, path, ['--json', '--smart-case', '--max-count', '10', '--max-filesize', '2M', '-e', query]);
+      // A pattern that matched nothing is exit code 1, which is an empty list rather than a failure.
+      if (found.code > 1) throw new Error(Buffer.from(found.stderr).toString('utf8').trim() || '搜索失败');
+      const hits: SearchHit[] = [];
+      for (const line of Buffer.from(found.stdout).toString('utf8').split('\n')) {
+        let event: RgEvent;
+        try { event = JSON.parse(line) as RgEvent; } catch { continue; }
+        if (event.type !== 'match' || !event.data.path) continue;
+        const text = (event.data.lines?.text ?? '').replace(/\r?\n$/, '');
+        // The offset counts bytes, so the column counts the characters those bytes spell.
+        const start = event.data.submatches?.[0]?.start ?? 0;
+        hits.push({
+          path: posix.resolve(path, event.data.path.text), line: event.data.line_number ?? 1,
+          column: Buffer.from(text).subarray(0, start).toString('utf8').length + 1, text: text.trim(),
+        });
+      }
+      return { hits: hits.slice(0, grepCeiling), truncated: hits.length > grepCeiling };
     })));
 
   // One watch set per tab: the window keeps a tab per workspace, and a tab that stops showing something must not stop

@@ -4,7 +4,7 @@ const { execFileSync } = require('node:child_process');
 const { writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { backButton, closeWorkspace, codeView, goToPath, lists, openFilesWorkspace, pathBox, storedHistory, waitForPath, workspaceTabs } = require('./files-ui.cjs');
+const { backButton, closeWorkspace, codeView, cursorLine, goToPath, lists, openFilesWorkspace, pathBox, storedHistory, waitForLine, waitForPath, workspaceTabs } = require('./files-ui.cjs');
 
 // The language servers running in this test's fixture: another test's window starts its own, with its own home.
 const languageServers = (home) => execFileSync('sh', ['-c', 'ps -Ao pid,command | grep "[b]in/typescript-language-server --stdio" || true'], { encoding: 'utf8' })
@@ -99,15 +99,7 @@ test('the right-click menu answers definitions, type definitions, and references
   await openFilesWorkspace(page);
   await goToPath(page, main);
   await codeView(page, 'new Square').waitFor();
-  // The line the cursor is drawn on: monaco gives the caret the offset of the line it sits in.
-  const cursorLine = () => page.evaluate(() => {
-    const caret = document.querySelector('.code-preview .cursors-layer > .cursor');
-    const top = caret && getComputedStyle(caret).top;
-    const line = [...document.querySelectorAll('.code-preview .view-line')].find((element) => getComputedStyle(element).top === top);
-    return line ? line.textContent.replace(/\u00a0/g, ' ') : null;
-  });
   const focused = () => page.evaluate(() => Boolean(document.activeElement?.closest('.code-preview')));
-  const waitForLine = (text) => until(async () => (await cursorLine()) === text);
   const menu = page.getByRole('menu', { name: '语言服务' });
   const openMenu = async (line, token) => {
     // Waited for: the token being drawn, the menu opening, and the click landing on the line asked for, since the
@@ -124,7 +116,7 @@ test('the right-click menu answers definitions, type definitions, and references
       await page.mouse.click(at.x, at.y, { button: 'right' });
       // The menu is offered only after the server has answered the handshake, which lands a moment after the click.
       await menu.waitFor({ timeout: 1500 }).catch(() => {});
-      return (await menu.count()) > 0 && (await cursorLine()) === line;
+      return (await menu.count()) > 0 && (await cursorLine(page)) === line;
     });
     const menuBox = await menu.boundingBox();
     assert.ok(Math.abs(menuBox.x - at.x) <= 2 && Math.abs(menuBox.y - at.y) <= 2, `menu at ${menuBox.x},${menuBox.y}, click at ${at.x},${at.y}`);
@@ -146,7 +138,7 @@ test('the right-click menu answers definitions, type definitions, and references
   assert.deepEqual(await menu.getByRole('menuitem').allTextContents(), ['转到定义', '转到实现', '转到类型定义', '查找引用']);
   // The class of a type annotation is a file of its own, which the jump opens at the class with the cursor in it.
   await jump('const shape: Shape = new Square();', 'Square', '转到定义', shapes);
-  await waitForLine('export class Square implements Shape {');
+  await waitForLine(page, 'export class Square implements Shape {');
   // The jump is recorded against the file it left.
   const leftEntry = Object.values(await storedHistory(page)).flatMap((history) => history.entries).filter((entry) => entry.path === main).at(-1);
   assert.equal(leftEntry.line, 5);
@@ -154,11 +146,11 @@ test('the right-click menu answers definitions, type definitions, and references
   // Going back returns to the line the jump started from, with the cursor focused there.
   await backButton(page).click();
   await waitForPath(page, main);
-  await waitForLine('const shape: Shape = new Square();');
+  await waitForLine(page, 'const shape: Shape = new Square();');
   assert.ok(await focused());
   // The type of the annotation is the interface the class implements.
   await jump('const shape: Shape = new Square();', 'Shape', '转到类型定义', shapes);
-  await waitForLine('export interface Shape {');
+  await waitForLine(page, 'export interface Shape {');
   await backButton(page).click();
   await waitForPath(page, main);
   // References are shown in monaco's own peek, which lists a file of its own for each; opening one moves the
@@ -176,7 +168,7 @@ test('the right-click menu answers definitions, type definitions, and references
   await shown.waitFor();
   await shown.dblclick();
   await waitForPath(page, shapes);
-  await waitForLine('export const answer = 42;');
+  await waitForLine(page, 'export const answer = 42;');
   assert.ok(await focused());
   // The menu follows what the server answers, not where the cursor is: a declaration offers the jumps too.
   await openMenu('export const answer = 42;', 'answer');

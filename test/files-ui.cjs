@@ -14,9 +14,7 @@ const boxOf = async (locator) => {
   return locatorBox;
 };
 
-// The terminal the workspace's session runs in: when it has drawn anything, a line of its output, which is where a
-// link in it is clicked, and the line a command is typed into.
-const terminalUp = (pane) => pane.locator('.xterm-rows').filter({ hasText: /\S/ }).waitFor();
+// The row of output a terminal drew, which is where a link in it is clicked.
 const terminalRow = (pane, text) => pane.locator('.xterm-rows > div').filter({ hasText: text }).first();
 const runIn = async (pane, line) => {
   const page = pane.page();
@@ -116,6 +114,16 @@ const waitForPath = (scope, path) => until(async () => (await pathBox(scope).inp
 const editorLines = (scope) => scope.locator('.monaco-editor .view-lines');
 const codeView = (scope, text) => editorLines(scope).filter({ hasText: text });
 
+// The line the caret is drawn on: monaco gives the caret the offset of the line it sits in, and draws only the lines
+// its viewport holds, so the caret's line is the one whose offset it shares.
+const cursorLine = (page) => page.evaluate(() => {
+  const caret = document.querySelector('.code-preview .cursors-layer > .cursor');
+  const top = caret && getComputedStyle(caret).top;
+  const line = [...document.querySelectorAll('.code-preview .view-line')].find((element) => getComputedStyle(element).top === top);
+  return line ? line.textContent.replace(/\u00a0/g, ' ') : null;
+});
+const waitForLine = (page, text) => until(async () => (await cursorLine(page)) === text);
+
 // The buttons of a panel's header.
 const backButton = (page) => page.getByRole('button', { name: '后退', exact: true });
 const forwardButton = (page) => page.getByRole('button', { name: '前进', exact: true });
@@ -127,6 +135,37 @@ const newSidebarTab = (page) => page.getByRole('button', { name: '新建侧栏�
 
 // The menu a view is picked from, once that button has opened it.
 const viewMenu = (page) => page.locator('#view-menu');
+
+// The search picker a panel opens: the panel it draws in, the input a query goes into, and the rows it found.
+const searchPanel = (scope) => scope.getByRole('dialog', { name: '搜索' });
+const searchInput = (scope) => searchPanel(scope).getByRole('textbox', { name: '搜索' });
+const searchRows = (scope) => searchPanel(scope).locator('.search-row');
+const searchRow = (scope, text) => searchRows(scope).filter({ hasText: text }).first();
+
+// The picker opened from the panel's header, with nothing in it yet.
+const openSearch = async (scope) => {
+  await scope.getByRole('button', { name: '搜索', exact: true }).click();
+  await searchPanel(scope).waitFor();
+};
+
+// Enter opens the row under the selection, which closes the picker.
+const submitSearch = async (scope) => {
+  await searchInput(scope).press('Enter');
+  await searchPanel(scope).waitFor({ state: 'detached' });
+};
+
+// Escape leaves the picker without opening anything.
+const dismissSearch = async (scope) => {
+  await searchInput(scope).press('Escape');
+  await searchPanel(scope).waitFor({ state: 'detached' });
+};
+
+// The picker opened with a query in it, waited for its rows: a search answers a moment after the query is typed.
+const search = async (scope, query) => {
+  await openSearch(scope);
+  await searchInput(scope).fill(query);
+  await until(async () => (await searchRows(scope).count()) > 0);
+};
 
 // A workspace and the files panel of it, which is the state most of these cases start from.
 const openFilesWorkspace = async (page) => {
@@ -144,7 +183,6 @@ module.exports = {
   machine,
   lists,
   boxOf,
-  terminalUp,
   terminalRow,
   runIn,
   columns,
@@ -186,6 +224,16 @@ module.exports = {
   waitForPath,
   editorLines,
   codeView,
+  cursorLine,
+  waitForLine,
+  searchPanel,
+  searchInput,
+  searchRows,
+  searchRow,
+  openSearch,
+  submitSearch,
+  dismissSearch,
+  search,
   backButton,
   forwardButton,
   refreshButton,

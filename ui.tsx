@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Markdown from 'react-markdown';
+import fuzzysort from 'fuzzysort';
 import remarkGfm from 'remark-gfm';
 import * as monaco from 'monaco-editor/editor/editor.api.js';
 import 'monaco-editor/basic-languages/monaco.contribution.js';
@@ -14,8 +15,8 @@ import 'monaco-editor/editor/contrib/gotoSymbol/browser/link/goToDefinitionAtPos
 import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbolQuickAccess.js';
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
-import { LanguageServices, buffer, languageFor, ownProviders } from './lsp';
-import { imageMime, machineKey, type FileClick, type Font, type GitHunk, type GitLines, type GitStatus, type History, type HistoryEntry, type Position, type Settings } from './shared';
+import { LanguageServices, buffer, languageFor, ownProviders, type FileSymbol } from './lsp';
+import { imageMime, machineKey, type FileClick, type Font, type GitHunk, type GitLines, type GitStatus, type History, type HistoryEntry, type Position, type SearchHit, type Settings } from './shared';
 import './style.css';
 
 export const title = '文件';
@@ -36,9 +37,9 @@ const watch = (context: UiContext, machine: FileClick['machine'], holder: string
 };
 
 type Remember = (entry: HistoryEntry, at: Partial<Position>) => void;
-type NavigationProps = { context: UiContext; file: HistoryEntry; navigate: (file: FileClick) => void; refresh: () => void; back?: () => void; forward?: () => void; openPicker: () => void };
+type NavigationProps = { context: UiContext; file: HistoryEntry; navigate: (file: FileClick) => void; refresh: () => void; back?: () => void; forward?: () => void; openPicker: () => void; openSearch: () => void };
 
-function Navigation({ context, file, navigate, refresh, back, forward, openPicker, children }: NavigationProps & { children?: ReactNode }) {
+function Navigation({ context, file, navigate, refresh, back, forward, openPicker, openSearch, children }: NavigationProps & { children?: ReactNode }) {
   const [path, setPath] = useState(file.path);
   const [error, setError] = useState('');
   const request = useRef(0);
@@ -53,6 +54,9 @@ function Navigation({ context, file, navigate, refresh, back, forward, openPicke
       </button>
       <button className="preview-arrow" aria-label="刷新" title="刷新" onClick={refresh}>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.3 6.7A5.3 5.3 0 1 0 12 12 M13.3 2.7v4h-4" /></svg>
+      </button>
+      <button className="preview-arrow" aria-label="搜索" title="搜索文件、内容与符号" onClick={openSearch}>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4" /><path d="m10 10 4 4" /></svg>
       </button>
       <form className="preview-address" onSubmit={(event) => {
         event.preventDefault();
@@ -219,7 +223,7 @@ function DiffPeek({ path, change, area, rowTop, close }: { path: string; change:
   </div>;
 }
 
-function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; notify: (reason: string) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember }) {
+function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember, previewing }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; notify: (reason: string) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean }) {
   const element = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   // The preview document asks for its content as soon as it loads, so the listener has to be in place first.
@@ -235,6 +239,10 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
   const control = useRef<monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
   // The marks of the decorations on screen, which is what a gutter click resolves against.
   const marks = useRef<GitMark[]>([]);
+  // The entry the editor shows now: the editor outlives the entry it was built for, so what its callbacks record is
+  // read from here. The ref is updated after the commit, before the effects below can record through it.
+  const shown = useRef(file);
+  useEffect(() => { shown.current = file; });
   const [menu, setMenu] = useState<{ x: number; y: number; actions: typeof lspActions }>();
   const [peek, setPeek] = useState<{ area: DOMRect; rowTop: number; change: GitMark }>();
   // A layer over the editor takes the caret with it, so closing one hands the caret back.
@@ -265,10 +273,12 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
   // unchanged one keeps its peek open.
   useEffect(() => {
     if (!peek) return;
-    const shown = JSON.stringify(peek.change.hunk);
-    if (mode === 'text' && hunks.some((hunk) => JSON.stringify(hunk) === shown)) return;
+    const peeked = JSON.stringify(peek.change.hunk);
+    if (mode === 'text' && hunks.some((hunk) => JSON.stringify(hunk) === peeked)) return;
     setPeek(undefined);
   }, [hunks, mode]);
+  // The editor is built again when the text or the mode changes, and never for a jump: a jump moves the same editor, so
+  // the language server keeps the model it already synchronizes.
   useEffect(() => {
     if (mode !== 'text') return;
     const language = languageFor(file.path);
@@ -282,23 +292,8 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
       ariaLabel: '代码预览', contextmenu: false,
     });
     control.current = editor;
-    const position = { lineNumber: file.line ?? 1, column: file.column ?? 1 };
-    editor.setPosition(position);
-    // Every open puts the caret and the keyboard in the preview.
-    editor.focus();
-    // A tab can mount while its panel is hidden, where the editor has no height to scroll in: the offset a file was
-    // left at waits for a layout, and a file that was never scrolled opens around its line instead.
-    let pending = file.top;
-    const restoreTop = () => {
-      if (pending === undefined || !editor.getLayoutInfo().height) return;
-      editor.setScrollTop(pending);
-      pending = undefined;
-    };
-    if (pending === undefined) editor.revealPositionInCenter(position);
-    else restoreTop();
-    const scrolled = editor.onDidScrollChange(() => remember(file, { top: editor.getScrollTop() }));
-    const moved = editor.onDidChangeCursorPosition(({ position }) => remember(file, { line: position.lineNumber, column: position.column }));
-    const laidOut = editor.onDidLayoutChange(restoreTop);
+    const scrolled = editor.onDidScrollChange(() => remember(shown.current, { top: editor.getScrollTop() }));
+    const moved = editor.onDidChangeCursorPosition(({ position }) => remember(shown.current, { line: position.lineNumber, column: position.column }));
     const opened = editor.onMouseDown((event) => {
       // A click on a gutter mark opens the block it stands for.
       if (event.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS) return;
@@ -329,9 +324,37 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember 
       alive = false;
       host.removeEventListener('contextmenu', openMenu);
       control.current = undefined;
-      scrolled.dispose(); moved.dispose(); laidOut.dispose(); opened.dispose(); editor.dispose(); onModel(undefined);
+      scrolled.dispose(); moved.dispose(); opened.dispose(); editor.dispose(); onModel(undefined);
     };
-  }, [file, text, mode, remember]);
+  }, [text, mode, remember]);
+  // Every open, and every rebuild of the editor, puts the caret and the keyboard in the preview — unless the page is
+  // only showing what a picker's selection stands for, where taking the keyboard would end the name being typed.
+  useEffect(() => {
+    if (!previewing) control.current?.focus();
+  }, [previewing, text, mode]);
+  // Where the view sits: the offset the file was left at, or else the line the entry was opened at, which a jump inside
+  // the file moves to as well. An editor that was built again starts at its own top, so the offset is taken for it once
+  // more; a panel that has given it no height yet places it on the first layout instead.
+  const placement = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; offset?: number }>(undefined);
+  useEffect(() => {
+    const editor = control.current;
+    if (!editor) return;
+    if (placement.current?.editor !== editor) placement.current = { editor, offset: file.top };
+    const state = placement.current;
+    const place = () => {
+      if (!editor.getLayoutInfo().height) return false;
+      if (state.offset !== undefined) { editor.setScrollTop(state.offset); state.offset = undefined; }
+      else if (file.line !== undefined) {
+        const position = { lineNumber: file.line, column: file.column ?? 1 };
+        editor.setPosition(position);
+        editor.revealPositionInCenter(position);
+      }
+      return true;
+    };
+    if (place()) return;
+    const laidOut = editor.onDidLayoutChange(() => { if (place()) laidOut.dispose(); });
+    return () => laidOut.dispose();
+  }, [file.line, file.column, text, mode]);
   // Git can report new marks without the text changing, so they are applied whenever the read returns them.
   useEffect(() => {
     const editor = control.current;
@@ -465,8 +488,8 @@ function MarkdownPage({ text, top, remember }: { text: string; top?: number; rem
   </div>;
 }
 
-function FileView(props: NavigationProps & { holder: string; remember: Remember }) {
-  const { context, file, holder } = props;
+function FileView(props: NavigationProps & { holder: string; remember: Remember; previewing: boolean }) {
+  const { context, file, holder, navigate, remember, previewing } = props;
   const [text, setText] = useState<string>();
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -475,6 +498,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember 
   const html = /\.html?$/i.test(file.path);
   const image = imageMime(file.path);
   const modes: Mode[] = image ? [] : ['text', ...(markdown ? ['markdown' as const] : []), ...(html ? ['html' as const] : [])];
+  // A file is read again when the path it names changes, not when the cursor moves inside it.
   useEffect(() => {
     let alive = true;
     let stop: () => void;
@@ -500,7 +524,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember 
     stop = watch(context, file.machine, holder, [file.path], read);
     read();
     return () => { alive = false; stop(); };
-  }, [context, file, holder]);
+  }, [context, holder, file.path]);
   const [mode, setMode] = useState<Mode>(html ? 'html' : markdown ? 'markdown' : 'text');
   const [model, setModel] = useState<monaco.editor.ITextModel>();
   useEffect(() => {
@@ -520,7 +544,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember 
     {error ? <div className="file-message" role="alert">{error}</div>
       : text === undefined ? <div className="file-message">正在读取…</div>
       : image ? <div className="image-preview"><img src={text} alt={file.path} /></div>
-      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={props.navigate} notify={setNotice} remember={props.remember} />}
+      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} notify={setNotice} remember={remember} previewing={previewing} />}
   </section>;
 }
 
@@ -644,7 +668,162 @@ function Picker(props: NavigationProps & { workspace: string; holder: string }) 
   </section>;
 }
 
-function BrowserView({ context, workspaceId, holder, file, picking, remember, ...navigation }: Omit<NavigationProps, 'file'> & { workspaceId?: string; holder: string; file?: HistoryEntry; picking: boolean; remember: Remember }) {
+// How many rows the page draws of a search's answer, and the number the note about a cut list names.
+const rowLimit = 200;
+
+// What the picker looks for, and the character that asks for each: a file's name, a pattern in the workspace's text, and
+// the symbols of the entry the tab is on.
+type SearchMode = 'files' | 'grep' | 'symbols';
+const searchLabels: Record<SearchMode, { hint: string; empty: string }> = {
+  files: { hint: '文件名', empty: '没有匹配的文件' },
+  grep: { hint: '内容', empty: '没有匹配的内容' },
+  symbols: { hint: '符号', empty: '没有匹配的符号' },
+};
+// A row of the picker: what it says, and what of a title the query matched, which the row marks.
+type SearchRow = { key: string; title: string; detail?: string; target: FileClick; hit?: ReadonlyArray<number> };
+
+// A title with the characters the query matched marked, so a row shows why it is on the list.
+const marked = (title: string, hit?: ReadonlyArray<number>) => {
+  const at = new Set(hit);
+  return [...title].map((letter, index) => (at.has(index) ? <b key={index}>{letter}</b> : letter));
+};
+
+// The search picker: one input whose first character chooses what it looks for, and the rows it finds under it. The page
+// follows the row under the selection, so what a row stands for is seen before Enter opens it.
+function Search({ context, visited, workspace, peek, navigate, close }: { context: UiContext; visited: HistoryEntry; workspace: string; peek: (file: FileClick) => void; navigate: (file: FileClick) => void; close: () => void }) {
+  const [query, setQuery] = useState('');
+  // A row is chosen by the user or not at all: until one is, the selection marks the row of the entry the tab is on and
+  // nothing is followed, so opening the picker does not take the reader away from what they were reading.
+  const [chosen, setChosen] = useState<number>();
+  const [files, setFiles] = useState<{ paths: string[]; truncated: boolean }>();
+  const [matches, setMatches] = useState<{ hits: SearchHit[]; truncated: boolean }>({ hits: [], truncated: false });
+  const [symbols, setSymbols] = useState<FileSymbol[]>();
+  // The message the picker shows, tagged with the source it speaks for: the search that wrote it may have been left
+  // behind.
+  const [status, setStatus] = useState<{ mode: SearchMode; text: string }>();
+  const clearStatus = (source: SearchMode) => setStatus((current) => (current?.mode === source ? undefined : current));
+  const list = useRef<HTMLDivElement>(null);
+  // Where a search starts: the workspace, or else the directory the tab's own entry sits in.
+  const directory = workspace || (visited.type === 'directory' ? visited.path : visited.path.slice(0, visited.path.lastIndexOf('/')) || '/');
+  const mode: SearchMode = query.startsWith('>') ? 'grep' : query.startsWith('@') ? 'symbols' : 'files';
+  const pattern = mode === 'files' ? query : query.slice(1);
+  useEffect(() => {
+    let alive = true;
+    void context.ui.request<{ files: string[]; truncated: boolean }>('find-files', { machine: visited.machine, path: directory })
+      .then((listed) => { if (alive) { setFiles({ paths: listed.files, truncated: listed.truncated }); clearStatus('files'); } })
+      .catch((problem: Error) => { if (alive) { setFiles({ paths: [], truncated: false }); setStatus({ mode: 'files', text: problem.message }); } });
+    return () => { alive = false; };
+  }, [context, visited.machine, directory]);
+  // Asking for these makes the language service open the document and answer for it.
+  useEffect(() => {
+    if (mode !== 'symbols') return;
+    let alive = true;
+    const model = monaco.editor.getModel(monaco.Uri.file(visited.path));
+    if (!model) return;
+    void services?.symbols(model).then((found) => { if (alive) setSymbols(found ?? []); });
+    return () => { alive = false; };
+  }, [mode, visited.path]);
+  // The answer that arrives for a pattern no longer in the input is dropped, since the rows on show belong to the current
+  // one.
+  const asked = useRef(0);
+  useEffect(() => {
+    if (mode !== 'grep') return;
+    const needle = pattern.trim();
+    if (!needle) { setMatches({ hits: [], truncated: false }); clearStatus('grep'); return; }
+    const id = ++asked.current;
+    setStatus({ mode: 'grep', text: '正在搜索…' });
+    // rg is asked once typing pauses: a key pressed mid-word would otherwise start a search for a pattern already gone.
+    const timer = setTimeout(() => {
+      void context.ui.request<{ hits: SearchHit[]; truncated: boolean }>('grep', { machine: visited.machine, path: directory, query: needle })
+        .then((found) => {
+          if (id !== asked.current) return;
+          setMatches({ hits: found.hits, truncated: found.truncated });
+          clearStatus('grep');
+        })
+        .catch((problem: Error) => { if (id !== asked.current) return; setMatches({ hits: [], truncated: false }); setStatus({ mode: 'grep', text: problem.message }); });
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [mode, pattern, context, visited.machine, directory]);
+  // The rows the page draws, and how many the query matched before the page kept its share: the ranker stops at the row
+  // limit itself, so a list is cut where it is ranked.
+  const { rows, matched } = useMemo<{ rows: SearchRow[]; matched: number }>(() => {
+    const needle = pattern.trim();
+    if (mode === 'grep') {
+      const rows = matches.hits.map((hit) => ({
+        key: `${hit.path}:${hit.line}`, title: hit.text || ' ',
+        detail: `${hit.path.startsWith(`${directory}/`) ? hit.path.slice(directory.length + 1) : hit.path}:${hit.line}`,
+        target: { type: 'file' as const, machine: visited.machine, path: hit.path, line: hit.line, column: hit.column },
+      }));
+      return { rows, matched: rows.length };
+    }
+    if (mode === 'symbols') {
+      const symbolRows = (symbols ?? []).map((symbol) => ({
+        name: symbol.name,
+        row: { key: `${symbol.line}:${symbol.column}`, title: symbol.name, detail: symbol.container, target: { type: 'file' as const, machine: visited.machine, path: visited.path, line: symbol.line, column: symbol.column } },
+      }));
+      if (!needle) return { rows: symbolRows.slice(0, rowLimit).map(({ row }) => row), matched: symbolRows.length };
+      const found = fuzzysort.go(needle, symbolRows, { key: 'name', threshold: 0, limit: rowLimit });
+      return { rows: found.map((one) => ({ ...one.obj.row, hit: one.indexes })), matched: found.total };
+    }
+    const fileRows = (files?.paths ?? []).map((path) => {
+      const name = path.slice(path.lastIndexOf('/') + 1);
+      const folder = path.startsWith(`${directory}/`) ? path.slice(directory.length + 1, path.length - name.length - 1) : path.slice(0, path.lastIndexOf('/'));
+      return { name, path, row: { key: path, title: name, detail: folder, target: { type: 'file' as const, machine: visited.machine, path } } };
+    });
+    if (!needle) return { rows: fileRows.slice(0, rowLimit).map(({ row }) => row), matched: fileRows.length };
+    // A name the query matches outranks a path it only matches through a folder, which is why the name is a key of its
+    // own: its score lifts its row above every row the path alone matched.
+    const found = fuzzysort.go(needle, fileRows, {
+      keys: ['name', 'path'], threshold: 0, limit: rowLimit,
+      scoreFn: (one) => (one[0].score > 0 ? 2 + one[0].score : one[1].score),
+    });
+    return { rows: found.map((one) => ({ ...one.obj.row, hit: one[0].score > 0 ? one[0].indexes : undefined })), matched: found.total };
+  }, [mode, pattern, directory, visited.machine, visited.path, files, matches, symbols]);
+  const cutBySource = mode === 'grep' ? matches.truncated : mode === 'files' ? files?.truncated ?? false : false;
+  const cut = matched > rowLimit || cutBySource;
+  const note = (status?.mode === mode ? status.text : '') || (cut ? `结果过多，只显示前 ${rowLimit} 条` : '');
+  // The index of the row standing for the entry the tab is on, if the rows hold it.
+  const current = rows.findIndex((row) => row.target.path === visited.path && (row.target.line === undefined || row.target.line === visited.line));
+  // Rows arrive after the keystroke that asked for them, so the chosen one is kept within what is on show.
+  const at = Math.min(chosen ?? Math.max(current, 0), Math.max(rows.length - 1, 0));
+  useEffect(() => { list.current?.querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest' }); }, [at, rows]);
+  // A name typed a letter at a time would otherwise read a file per letter, so the row under the selection is taken
+  // once the selection rests.
+  useEffect(() => {
+    const target = rows[at]?.target;
+    if (chosen === undefined || !target) return;
+    const timer = setTimeout(() => peek(target), 120);
+    return () => clearTimeout(timer);
+  }, [chosen, at, rows]);
+  return <div className="search-panel" role="dialog" aria-label="搜索">
+    <div className="search-head">
+      <span className="search-mode">{searchLabels[mode].hint}</span>
+      <input className="search-input" aria-label="搜索" autoFocus value={query} spellCheck={false} placeholder="文件名 · > 内容 · @ 符号"
+        onChange={(event) => { setQuery(event.target.value); setChosen(0); }}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') { event.preventDefault(); close(); }
+          else if (event.key === 'Enter') { event.preventDefault(); const row = rows[at]; if (row) navigate(row.target); }
+          else if (event.key === 'ArrowDown') { event.preventDefault(); setChosen(Math.min(at + 1, Math.max(rows.length - 1, 0))); }
+          else if (event.key === 'ArrowUp') { event.preventDefault(); setChosen(Math.max(at - 1, 0)); }
+        }} />
+      <button className="search-close" type="button" aria-label="关闭搜索" title="关闭" onClick={close}>×</button>
+    </div>
+    {note && <div className="search-note">{note}</div>}
+    <div className="search-list" ref={list}>
+      {rows.map((row, index) => <button key={row.key} type="button" className="search-row" aria-current={index === at || undefined} onClick={() => navigate(row.target)} onMouseEnter={() => setChosen(index)}>
+        <span className="search-title">{marked(row.title, row.hit)}</span>
+        {row.detail && <span className="search-detail">{row.detail}</span>}
+      </button>)}
+      {!rows.length && <div className="file-message">{searchLabels[mode].empty}</div>}
+    </div>
+  </div>;
+}
+
+// The page a tab draws: the file on show or the columns of the directory picker, and the search picker over it.
+
+// `file` is what the page shows, which a picker's selection may stand in for; `visited` is the entry the tab is on,
+// which the picker anchors to — the file whose symbols it lists, and the directory it searches in.
+function BrowserView({ context, workspaceId, holder, file, visited, picking, searching, remember, closeSearch, peek, ...navigation }: Omit<NavigationProps, 'file'> & { workspaceId?: string; holder: string; file?: HistoryEntry; visited?: HistoryEntry; picking: boolean; searching: boolean; remember: Remember; closeSearch: () => void; peek: (file: FileClick) => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [workspace, setWorkspace] = useState('');
@@ -667,13 +846,17 @@ function BrowserView({ context, workspaceId, holder, file, picking, remember, ..
     return () => { alive = false; off(); };
   }, [context, workspaceId, following, navigation.navigate]);
   if (!file) return <div className="file-message" role={error ? 'alert' : undefined}>{error || (loading ? '正在读取…' : '请选择一个已连接的终端')}</div>;
-  const key = JSON.stringify([file.machine.id, file.machine.host, file.path, file.line, file.column]);
+  // Only a different path or machine rebuilds the page.
+  const key = JSON.stringify([file.machine.id, file.machine.host, file.path]);
   // A machine lists its own directories, while a walk through one keeps the columns it opened, so only a
   // different machine rebuilds the picker.
   const pickerKey = machineKey(file.machine);
-  return file.type === 'directory' || picking
-    ? <Picker key={pickerKey} context={context} file={file} workspace={workspace} holder={holder} {...navigation} />
-    : <FileView key={key} context={context} file={file} holder={holder} remember={remember} {...navigation} />;
+  return <div className={searching ? 'browser-view searching' : 'browser-view'}>
+    {file.type === 'directory' || picking
+      ? <Picker key={pickerKey} context={context} file={file} workspace={workspace} holder={holder} {...navigation} />
+      : <FileView key={key} context={context} file={file} holder={holder} remember={remember} previewing={searching} {...navigation} />}
+    {visited && searching && <Search context={context} visited={visited} workspace={workspace} peek={peek} navigate={navigation.navigate} close={closeSearch} />}
+  </div>;
 }
 
 export function open(context: UiContext, record?: TabRecord) {
@@ -686,7 +869,9 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
   const key = workspaceId ?? '';
   const history = histories.get(key) ?? { entries: [], index: -1 };
   histories.set(key, history);
-  let picking = false;
+  // What the tab shows on top of the page the history points at: the two pickers, and the file a picker's selection
+  // stands for, which is shown without being visited.
+  const view: { picking: boolean; searching: boolean; preview?: FileClick } = { picking: false, searching: false };
   const push = (file: FileClick) => {
     const current = history.entries[history.index];
     if (!current || current.machine.id !== file.machine.id || current.machine.host !== file.machine.host || current.type !== file.type || current.path !== file.path || current.line !== file.line || current.column !== file.column) {
@@ -703,11 +888,27 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
   }, mount(container: HTMLElement) {
     container.style.fontFamily = font.family;
     const root = createRoot(container);
+    // Every move of what the tab shows goes through here: a caller says what it opens, and what no longer holds is
+    // cleared for it, so no caller has to remember the parts it is not touching.
+    const show = (next: Partial<typeof view> = {}) => {
+      Object.assign(view, { picking: false, searching: false, preview: undefined }, next);
+      render();
+    };
     // A view is handed the same callbacks on every render: its effect depends on navigate, and a new identity each
     // render would run that effect again, which asks for the workspace again, which navigates and renders again.
-    const navigate = (file: FileClick) => { picking = false; push(file); render(); };
-    const openPicker = () => { picking = true; render(); };
+    const navigate = (file: FileClick) => { push(file); show(); };
+    const openPicker = () => show({ picking: true });
+    const openSearch = () => show({ searching: true });
+    const closeSearch = () => show();
+    // The picker stays open where the name is being typed.
+    const peek = (file: FileClick) => show({ searching: true, preview: file });
     const refresh = () => { history.entries[history.index] = { ...history.entries[history.index] }; render(); };
+    // Walking the tab's history: the entry it lands on is saved with the rest, and the pickers it leaves are cleared.
+    const step = (by: number) => {
+      history.index += by;
+      void context.ui.request('save-history', Object.fromEntries(histories));
+      show();
+    };
     // The entry is the one the view shows rather than whatever the history points at now: a cursor move monaco reports
     // after a jump belongs to the file that was left, not to the one the jump opened.
     const remember = (entry: HistoryEntry, at: Partial<Position>) => {
@@ -715,23 +916,16 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
       // A file left at its top is where a fresh open puts it, so there is no offset worth keeping.
       if (entry.top === 0) delete entry.top;
     };
-    const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} holder={key} file={history.entries[history.index]} picking={picking}
+    const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} holder={key} file={view.preview ?? history.entries[history.index]} visited={history.entries[history.index]} picking={view.picking} searching={view.searching}
       navigate={navigate}
       remember={remember}
       openPicker={openPicker}
+      openSearch={openSearch}
+      closeSearch={closeSearch}
+      peek={peek}
       refresh={refresh}
-      back={history.index > 0 ? () => {
-        picking = false;
-        history.index--;
-        void context.ui.request('save-history', Object.fromEntries(histories));
-        render();
-      } : undefined}
-      forward={history.index < history.entries.length - 1 ? () => {
-        picking = false;
-        history.index++;
-        void context.ui.request('save-history', Object.fromEntries(histories));
-        render();
-      } : undefined} />);
+      back={history.index > 0 ? () => step(-1) : undefined}
+      forward={history.index < history.entries.length - 1 ? () => step(1) : undefined} />);
     return { onSelect: render, dispose: () => root.unmount() };
   } });
 }

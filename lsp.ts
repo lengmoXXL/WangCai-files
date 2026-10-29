@@ -327,6 +327,43 @@ class LspProxy {
   }
 }
 
+// A symbol as either form a server answers a document's symbols in: a file's own tree, whose nested entries are what
+// they are declared in, or a flat list that carries each one's range in a location.
+type ServerSymbol = { name: string; kind?: number; range?: Range; selectionRange?: Range; location?: { range: Range }; children?: ServerSymbol[] };
+// What the picker lists for a file: a declaration, under the name of whatever declares it.
+export type FileSymbol = { name: string; container?: string; line: number; column: number };
+
+// The symbol kinds whose children are declarations of their own: a type of any language holds its members, and a file
+// holds what it declares. Anything else — a function, a statement, a JSX child — holds statements and locals.
+const containers = new Set([2, 3, 5, 10, 11, 19, 23]);
+// What a file declares: a module, a namespace, a class, an enum, an interface, a function, a variable or constant, an
+// object, a struct.
+const declarations = new Set([2, 3, 5, 10, 11, 12, 13, 14, 19, 23]);
+// What a type declares, which a file's declaration list shows as well: its methods, properties, fields, constructor and
+// enum members.
+const members = new Set([6, 7, 8, 9, 22]);
+// A server describes what it cannot name with a placeholder — `<unknown>`, `<function>`, `[computed]`, `a.map() callback`
+// — and nothing a reader can look up has such a name.
+const unnamed = (name: string) => name.startsWith('<') || name.startsWith('[') || name.includes(' callback');
+
+// A file's symbols, the way an editor's outline reads it: what the file declares, and the members of the types it
+// declares, walking into an entry only where `containers` says its children are declarations too.
+function outline(items: ServerSymbol[]): FileSymbol[] {
+  const symbols: FileSymbol[] = [];
+  const walk = (entries: ServerSymbol[], container?: string) => {
+    for (const item of entries) {
+      if (unnamed(item.name)) continue;
+      const kind = item.kind ?? 0;
+      if (!declarations.has(kind) && (container === undefined || !members.has(kind))) continue;
+      const range = item.selectionRange ?? item.location?.range ?? item.range;
+      symbols.push({ name: item.name, container, line: (range?.start.line ?? 0) + 1, column: (range?.start.character ?? 0) + 1 });
+      if (item.children && containers.has(kind)) walk(item.children, [...(container ? [container] : []), item.name].join(' · '));
+    }
+  };
+  walk(items);
+  return symbols;
+}
+
 // The language servers this window drives, one monaco LSP client per server. A client is never disposed —
 // monaco's has no way to — so a server that is restarted leaves its client behind and starts another one.
 export class LanguageServices {
@@ -412,6 +449,45 @@ export class LanguageServices {
     if (!found) return undefined;
     const state = found.proxy.state.value;
     return { server: found.proxy.info.server, root: found.proxy.info.root, state: state.state, error: state.state === 'closed' ? state.error?.message : undefined, log: this.logs.get(found.view.session) };
+  }
+
+  // The proxy a file speaks to, waiting for the view that opens it: the picker asks about a file whose server the
+  // page is starting, and a request sent before that opening lands on a server nobody has told to start.
+  private async proxyFor(model: monaco.editor.ITextModel) {
+    const usable = () => {
+      const proxy = this.for(model);
+      return proxy && proxy.state.value.state !== 'connecting' ? proxy : undefined;
+    };
+    const ready = usable();
+    if (ready) return ready;
+    return new Promise<LspProxy | undefined>((resolve) => {
+      // The subscription replaces this placeholder before the timeout can fire, and whichever answers first releases
+      // both.
+      let stop = () => {};
+      const timer = setTimeout(() => { stop(); resolve(usable()); }, 5000);
+      stop = this.subscribe(() => {
+        const proxy = usable();
+        if (!proxy) return;
+        clearTimeout(timer);
+        stop();
+        resolve(proxy);
+      });
+    });
+  }
+
+  // The symbols a file's server lists for it, as `outline` reads them: `undefined` for a file no server serves.
+  async symbols(model: monaco.editor.ITextModel): Promise<FileSymbol[] | undefined> {
+    const proxy = await this.proxyFor(model);
+    if (!proxy) return undefined;
+    // A server that has not been told the document is open yet lists nothing at all, which is indistinguishable from a
+    // file without symbols, so an empty answer is asked again for as long as that handshake takes.
+    const ask = () => proxy.request('textDocument/documentSymbol', { textDocument: { uri: model.uri.toString(true) } }).catch(() => undefined);
+    let answer = await ask();
+    for (let attempt = 0; attempt < 4 && Array.isArray(answer) && !answer.length; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      answer = await ask();
+    }
+    return Array.isArray(answer) ? outline(answer as ServerSymbol[]) : [];
   }
 
   // A restart replaces the server behind this file: its session is dropped here, and the file is opened again on

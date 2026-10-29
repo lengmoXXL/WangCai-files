@@ -12,6 +12,9 @@ export type LspData = { session: string; data: string };
 export type LspLog = { session: string; text: string };
 export type LspExit = { session: string; code?: number };
 
+// A search's rows: a match in a file's text, at the line and column the row jumps to.
+export type SearchHit = { path: string; line: number; column: number; text: string };
+
 // VS Code's decoration letters: git's M/A/D/R/C/T, with 'U' for untracked and '!' for a conflict.
 export type GitLetter = 'M' | 'A' | 'D' | 'R' | 'C' | 'T' | 'U' | '!';
 export type GitStatus = { root: string; states: Record<string, GitLetter> };

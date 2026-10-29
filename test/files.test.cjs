@@ -4,7 +4,7 @@ const { mkdirSync, rmSync, statSync, writeFileSync } = require('node:fs');
 const { basename, join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { activeTerminal, createWorkspace, openView, serveRenderer, until, viewTabs, withHome, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { backButton, clickFile, codeView, collectErrors, columnOf, columns, desktopMain, drawnCloseButtons, editorLines, emptyDirectory, entry, filePicker, filePreview, filesPanels, filesTab, filesTabPanel, forwardButton, goToPath, goToPathEntry, lists, machine, markdownDivider, markdownPage, markdownPane, markdownScroll, modeButton, newSidebarTab, openWorkspaces, pathBox, previewMenu, previewMode, previewModes, refreshButton, renderedPage, runIn, shownPanel, sidebarRight, sidebarToggle, storedHistory, terminalRow, terminalUp, viewMenu, waitForPath, workspaceBar, workspaceTabs } = require('./files-ui.cjs');
+const { backButton, clickFile, codeView, collectErrors, columnOf, columns, desktopMain, drawnCloseButtons, editorLines, emptyDirectory, entry, filePicker, filePreview, filesPanels, filesTab, filesTabPanel, forwardButton, goToPath, goToPathEntry, lists, machine, markdownDivider, markdownPage, markdownPane, markdownScroll, modeButton, newSidebarTab, openWorkspaces, pathBox, previewMenu, previewMode, previewModes, refreshButton, renderedPage, runIn, shownPanel, sidebarRight, sidebarToggle, storedHistory, terminalRow, viewMenu, waitForPath, workspaceBar, workspaceTabs } = require('./files-ui.cjs');
 
 test('view picker browses current terminal directory; file links preview code, Markdown, HTML and images', { timeout: 180000 }, () => withHome('wangcai-files', lists, async ({ home, env, open }) => {
   let { desktop, page, close } = await open();
@@ -437,15 +437,12 @@ test('view picker browses current terminal directory; file links preview code, M
   await page.waitForTimeout(900);
   assert.equal(await clickCount(), clicksSoFar);
   await page.keyboard.up('Meta');
-  // Clicking through the mouse hangs on the picker.
+  // A link click still reaches the plugin while its own panel is behind another one. The sidebar's terminal draws its
+  // rows on a canvas, so the link is clicked in the workspace's terminal instead.
   await newSidebarTab(page).evaluate((element) => element.click());
   await viewMenu(page).getByRole('button', { name: '终端', exact: true }).click();
-  const sidebarTerminal = shownPanel(page).locator('.terminal-pane');
-  await terminalUp(sidebarTerminal);
-  await runIn(sidebarTerminal, `cd '${home}'; printf '\\033[2J\\033[Hsample.ts:2\\n'`);
-  const sidebarRow = terminalRow(sidebarTerminal, 'sample.ts:2');
-  await sidebarRow.waitFor();
-  await clickPoint(() => firstChar(sidebarRow, 'sample.ts:2'));
+  await shownPanel(page).locator('.terminal-pane').waitFor();
+  await clickLink('sample.ts:2');
   assert.deepEqual(await lastClick(), { type: 'file', path: code, line: 2, column: undefined });
   assert.equal(await page.evaluate(() => document.documentElement.scrollTop), 0);
   const stopRenderer = await serveRenderer(env);

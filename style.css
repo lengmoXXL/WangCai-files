@@ -64,6 +64,30 @@
 .preview-notice button:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
 .file-message { padding: 16px; font-size: 12px; color: var(--wc-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* The page and the search picker over it: the picker is placed against this box, so a preview that changes under it
+   does not take the picker along. It takes the lower half rather than covering it, so a page that follows the selection
+   centres its line in what is left of it, and the half it takes and the page leaves is one fraction both read. */
+.browser-view { position: relative; height: 100%; }
+.browser-view.searching { --search-half: 50%; }
+.browser-view.searching > .file-preview { height: var(--search-half); }
+
+.search-panel { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; flex-direction: column; height: var(--search-half); font-size: 12px; color: var(--wc-foreground); background: var(--wc-background); border-top: 1px solid var(--wc-border); box-shadow: 0 -8px 24px #0004; }
+.search-head { flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 6px; border-bottom: 1px solid var(--wc-border); }
+.search-mode { flex-shrink: 0; color: var(--wc-muted); font-size: 11px; }
+.search-input { flex: 1; min-width: 0; height: 22px; padding: 0 4px; font: inherit; color: var(--wc-foreground); background: var(--wc-overlay); border: 1px solid var(--wc-accent); border-radius: 3px; outline: none; }
+.search-close { flex-shrink: 0; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; font: inherit; color: var(--wc-muted); background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
+.search-close:hover { color: var(--wc-foreground); background: var(--wc-overlay); }
+.search-close:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
+.search-note { flex-shrink: 0; padding: 2px 8px 4px; font-size: 11px; color: var(--wc-yellow); overflow-wrap: anywhere; }
+.search-list { flex: 1; min-height: 0; overflow: auto; }
+.search-row { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 3px 8px; font: inherit; color: inherit; background: transparent; border: 0; text-align: left; cursor: pointer; }
+.search-row:hover { background: var(--wc-overlay); }
+.search-row[aria-current] { background: var(--wc-selection); }
+.search-row:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
+.search-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-title b { color: var(--wc-accent); font-weight: 600; }
+.search-detail { flex-shrink: 0; max-width: 60%; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--wc-muted); }
+
 /* VS Code's gutter: a bar for a changed line, a triangle where lines went away. */
 .git-line-added { border-left: 3px solid var(--wc-green); }
 .git-line-modified { border-left: 3px solid var(--wc-blue); }
