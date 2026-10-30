@@ -114,10 +114,10 @@ function splitFrontmatter(text: string): { fields: [string, string][]; body: str
   return { fields, body: text.slice(match[0].length) };
 }
 
-const stateLabels = { connecting: '正在启动', open: '运行中', closed: '已退出' };
+const stateLabels = { connecting: '正在启动', open: '运行中', closed: '已退出', missing: '未启动' };
 
-// The dot in the toolbar for this file's language server: hovering it names the server and how it is doing, and
-// clicking it restarts the server behind the file.
+// The dot in the toolbar for this file's language service: hovering it names that service and how it is doing, and
+// clicking it starts the server behind the file, or starts it again when one was running.
 function LspStatus({ model }: { model?: monaco.editor.ITextModel }) {
   const [, rerender] = useReducer((count: number) => count + 1, 0);
   const [hover, setHover] = useState(false);
@@ -131,10 +131,10 @@ function LspStatus({ model }: { model?: monaco.editor.ITextModel }) {
     {hover && <div className="preview-lsp-detail" role="tooltip">
       <span className="preview-lsp-name">{status.server}</span>
       <span>{stateLabels[status.state]}</span>
-      <span>{status.root}</span>
+      {status.root && <span>{status.root}</span>}
       {status.error && <span>{status.error}</span>}
       {status.log && <span>{status.log}</span>}
-      <span>点击重启这个服务</span>
+      <span>{status.state === 'missing' ? '点击重试' : '点击重启这个服务'}</span>
     </div>}
   </div>;
 }
@@ -223,7 +223,7 @@ function DiffPeek({ path, change, area, rowTop, close }: { path: string; change:
   </div>;
 }
 
-function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember, previewing }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; notify: (reason: string) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean }) {
+function Preview({ file, text, mode, hunks, navigate, onModel, remember, previewing }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean }) {
   const element = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   // The preview document asks for its content as soon as it loads, so the listener has to be in place first.
@@ -302,8 +302,7 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember,
       event.event.preventDefault();
       setPeek({ ...placePeek(change), change });
     });
-    let alive = true;
-    void services?.open({ machine: file.machine, path: file.path, language, model, navigate, notify: (reason) => { if (alive) notify(reason); } });
+    void services?.open({ machine: file.machine, path: file.path, language, model, navigate });
     const host = element.current!;
     // A right click asks this plugin's menu instead of the browser's.
     const openMenu = (event: MouseEvent) => {
@@ -321,7 +320,6 @@ function Preview({ file, text, mode, hunks, navigate, notify, onModel, remember,
     };
     host.addEventListener('contextmenu', openMenu);
     return () => {
-      alive = false;
       host.removeEventListener('contextmenu', openMenu);
       control.current = undefined;
       scrolled.dispose(); moved.dispose(); opened.dispose(); editor.dispose(); onModel(undefined);
@@ -492,7 +490,6 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
   const { context, file, holder, navigate, remember, previewing } = props;
   const [text, setText] = useState<string>();
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
   const [hunks, setHunks] = useState<GitHunk[]>([]);
   const markdown = /\.(md|markdown)$/i.test(file.path);
   const html = /\.html?$/i.test(file.path);
@@ -503,7 +500,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
     let alive = true;
     let stop: () => void;
     let root = '';
-    setText(undefined); setError(''); setNotice(''); setHunks([]);
+    setText(undefined); setError(''); setHunks([]);
     const read = () => {
       void context.ui.request<string>('read', file).then((text) => { if (alive) { setText(text); setError(''); } })
         .catch((error: Error) => { if (alive) setError(error.message); });
@@ -527,24 +524,15 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
   }, [context, holder, file.path]);
   const [mode, setMode] = useState<Mode>(html ? 'html' : markdown ? 'markdown' : 'text');
   const [model, setModel] = useState<monaco.editor.ITextModel>();
-  useEffect(() => {
-    if (!model) return;
-    // The notice describes a server that is not running, so it goes once this file's server is up again.
-    return services?.subscribe(() => { if (services?.status(model)?.state === 'open') setNotice(''); });
-  }, [model]);
   return <section className="file-preview" aria-label="文件预览">
     <Navigation {...props}>
       {modes.length > 1 && <ModeMenu modes={modes} mode={mode} select={setMode} />}
       <LspStatus model={model} />
     </Navigation>
-    {notice && <div className="preview-notice" role="alert">
-      <span>{notice}</span>
-      <button type="button" aria-label="关闭语言服务提示" title="关闭" onClick={() => setNotice('')}>×</button>
-    </div>}
     {error ? <div className="file-message" role="alert">{error}</div>
       : text === undefined ? <div className="file-message">正在读取…</div>
       : image ? <div className="image-preview"><img src={text} alt={file.path} /></div>
-      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} notify={setNotice} remember={remember} previewing={previewing} />}
+      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} previewing={previewing} />}
   </section>;
 }
 

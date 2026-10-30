@@ -299,7 +299,7 @@ export function activate(context: MainContext) {
         if (!spec) return null;
         const directory = posix.dirname(path);
         const located = await locate(connection, machine, spec.commands, directory);
-        if (!located) return null;
+        if (!located) throw new Error(`未找到 ${spec.commands.map(([command]) => command).join(' / ')}`);
         const root = await findRoot(connection, directory, spec.markers);
         const name = posix.basename(located.command);
         const session = `${machineKey(machine)}|${language}|${root}`;

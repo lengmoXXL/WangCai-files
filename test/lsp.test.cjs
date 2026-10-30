@@ -1,15 +1,19 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { writeFileSync } = require('node:fs');
+const { existsSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { backButton, closeWorkspace, codeView, cursorLine, goToPath, lists, openFilesWorkspace, pathBox, storedHistory, waitForLine, waitForPath, workspaceTabs } = require('./files-ui.cjs');
+const { until, wangcaiApp, withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { backButton, closeWorkspace, codeView, cursorLine, filePreview, goToPath, lists, lspDetail, lspDot, openFilesWorkspace, pathBox, refreshButton, storedHistory, waitForLine, waitForPath, workspaceTabs } = require('./files-ui.cjs');
+
+// The processes whose command line holds this text: ps is read once and cut here, so every probe cuts the same way.
+const pids = (text) => execFileSync('sh', ['-c', 'ps -Ao pid,command'], { encoding: 'utf8' })
+  .split('\n').filter((line) => line.includes(text))
+  .map((line) => line.trim().split(' ')[0]);
 
 // The language servers running in this test's fixture: another test's window starts its own, with its own home.
-const languageServers = (home) => execFileSync('sh', ['-c', 'ps -Ao pid,command | grep "[b]in/typescript-language-server --stdio" || true'], { encoding: 'utf8' })
-  .trim().split('\n').filter(Boolean)
-  .map((line) => line.split(' ')[0])
+const languageServers = (home) => pids('bin/typescript-language-server --stdio')
   .filter((pid) => execFileSync('sh', ['-c', `lsof -p ${pid} -a -d cwd -Fn 2>/dev/null || true`], { encoding: 'utf8' }).includes(`n${home}`));
 // Where a word is drawn. Monaco keeps its lines absolutely positioned, so the element holding a given line is looked
 // for by what it says rather than by its place among the others.
@@ -43,12 +47,13 @@ test('a code file keeps a language server for hover, jump, and diagnostics until
   await openFilesWorkspace(page);
   await goToPath(page, source);
   await codeView(page, 'TYPE_ERROR').waitFor();
-  // The widgets a hover and a jump draw in the editor, and the status dot whose menu names the server behind it.
-  const status = page.locator('.preview-lsp');
+  // The widgets a hover and a jump draw in the editor.
   const hover = page.locator('.monaco-hover').filter({ hasText: 'const answer: 42' });
   const definitionLink = page.locator('.goto-definition-link');
-  const detail = page.locator('.preview-lsp-detail');
-  await status.hover();
+  // The dot, and the tooltip that names the service behind the file and how it is doing.
+  const dot = lspDot(page);
+  const detail = lspDetail(page);
+  await dot.hover();
   await detail.filter({ hasText: 'typescript-language-server' }).waitFor();
   await page.mouse.move(0, 0);
   // A diagnostic arrives as a marker, which the editor paints as a squiggle over the offending text.
@@ -71,7 +76,7 @@ test('a code file keeps a language server for hover, jump, and diagnostics until
   assert.deepEqual(errors, []);
 
   // The status dot restarts the server of the file it is drawn for, and the new one takes over this window.
-  await status.click();
+  await dot.click();
   await detail.filter({ hasText: '运行中' }).waitFor();
   await page.mouse.move(0, 0);
   // The jump left the editor on the definition's file, so its own `answer` token is where a hover can land.
@@ -190,5 +195,126 @@ test('the right-click menu answers definitions, type definitions, and references
   await codeView(page, 'notes').waitFor();
   const plainAt = await tokenAt(page, 'notes', 'notes');
   await noMenu(() => page.mouse.click(plainAt.x, plainAt.y, { button: 'right' }));
+  assert.deepEqual(errors, []);
+}));
+
+// A window whose rust server is the command given: the rest of its plugin list is the one every case runs.
+const rustServer = (command) => ({ ...lists, tabs: [{ id: 'files', config: { lsp: { rust: { command } } } }, 'terminal'] });
+
+// Rust's server is asked for by a command this machine does not have, so the window finds out it has none.
+test('a language with no server on this machine says so on its dot, and the page stays quiet', { timeout: 120000 }, () => withWindow('wangcai-files-missing-server', rustServer(['no-such-language-server']), async ({ home, page, errors }) => {
+  writeFileSync(join(home, 'main.rs'), 'fn main() {}\n');
+  await openFilesWorkspace(page);
+  await goToPath(page, join(home, 'main.rs'));
+  await codeView(page, 'fn main').waitFor();
+  const dot = lspDot(page, 'missing');
+  const detail = lspDetail(page);
+  await dot.waitFor();
+  await dot.hover();
+  // The reason a server is not there is read on the dot, and the page raises nothing of its own about it.
+  await until(async () => (await detail.innerText()).includes('未启动'));
+  assert.match(await detail.innerText(), /no-such-language-server/);
+  assert.equal(await filePreview(page).getByRole('alert').count(), 0);
+  assert.deepEqual(errors, []);
+}));
+
+// The agent a window talks to, whose going away takes every server it spawned with it.
+const agent = join(wangcaiApp(), 'wangcaicli/dist/debug/wangcai');
+// Whether that agent is up again, which is the moment before the window's next request can reach it.
+const agentRunning = (home) => pids('wangcai server start --foreground')
+  .some((pid) => execFileSync('sh', ['-c', `ps eww -o command= -p ${pid} 2>/dev/null || true`], { encoding: 'utf8' }).includes(`HOME=${home}`));
+
+test('a language server the node lost is started again by the window', { timeout: 180000 }, () => withWindow('wangcai-files-revive', lists, async ({ home, page, errors }) => {
+  writeFileSync(join(home, 'tsconfig.json'), '{"compilerOptions":{"strict":true}}\n');
+  writeFileSync(join(home, 'main.ts'), 'export function computeTotal() {\n  return 1;\n}\n');
+  await openFilesWorkspace(page);
+  await goToPath(page, join(home, 'main.ts'));
+  await codeView(page, 'computeTotal').waitFor();
+  await lspDot(page, 'open').waitFor();
+  // The process is looked for rather than assumed: lsof can miss one that has only just started.
+  await until(() => languageServers(home).length === 1, { timeout: 30000 });
+  // The agent goes away and takes its language server with it.
+  execFileSync(agent, ['server', 'stop'], { env: { ...process.env, HOME: home }, stdio: 'ignore' });
+  await until(() => !languageServers(home).length, { timeout: 30000 });
+  // The window reconnects to a fresh agent on its own; the next write then lands on a server that node no longer has,
+  // which is the failure the window starts one again from.
+  await until(() => agentRunning(home), { timeout: 60000 });
+  writeFileSync(join(home, 'main.ts'), 'export function computeTotal() {\n  return 2;\n}\n');
+  await refreshButton(page).click();
+  await codeView(page, 'return 2').waitFor();
+  await until(() => languageServers(home).length === 1, { timeout: 90000 });
+  await lspDot(page, 'open').waitFor();
+  assert.deepEqual(errors, []);
+}));
+
+const dyingLife = 3;
+// The command this case runs as a server: it comes up, takes a write, and dies again. The probe below looks for that same
+// command line, so the fixture and the probe cannot drift apart.
+const dyingCommand = `sleep ${dyingLife}; exit 1 # wangcai-dying-server`;
+// Its processes while they live: one per start, which is what the tries are counted by.
+const dyingServers = () => pids(dyingCommand);
+
+test('a server that keeps dying is left stopped once its tries are spent', { timeout: 180000 }, () => withWindow('wangcai-files-dying-server', rustServer(['/bin/sh', '-c', dyingCommand]), async ({ home, page, errors }) => {
+  writeFileSync(join(home, 'main.rs'), 'fn main() {}\n');
+  await openFilesWorkspace(page);
+  await goToPath(page, join(home, 'main.rs'));
+  await codeView(page, 'fn main').waitFor();
+  // What the tries are worth is counted rather than timed: each start of this server is a process of its own, and once
+  // the tries are spent no new one comes up.
+  const started = new Set();
+  let grownAt = Date.now();
+  // The waits between tries add up to about eleven seconds and each life lasts `dyingLife`, so the last start comes at
+  // around twenty seconds; the window is long enough to watch twenty more go by without one.
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) {
+    const before = started.size;
+    for (const pid of dyingServers()) started.add(pid);
+    if (started.size > before) grownAt = Date.now();
+    await page.waitForTimeout(250);
+  }
+  assert.ok(started.size > 0, 'the server was never started');
+  // The stretch at the end of the window that no start has interrupted.
+  assert.ok(Date.now() - grownAt > 20000, `a server started ${Date.now() - grownAt}ms ago`);
+  await lspDot(page, 'closed').waitFor();
+  assert.deepEqual(errors, []);
+}));
+
+const attempts = join(tmpdir(), `wangcai-attempts-${process.pid}-${Date.now()}`);
+// The command this case runs as a server counts its own starts in that file: the first three die at once, which spends the
+// tries, and the fourth stays up past the window that gives a server them back. Its life has to clear that window plus the
+// moment between its start and the write the window is measured from.
+const countingServer = rustServer(['/bin/sh', '-c', `n=$(($(cat '${attempts}' 2>/dev/null || echo 0)+1)); echo $n > '${attempts}'; [ $n -ge 4 ] && sleep 40; exit 1`]);
+// How many times the server of a case has started, as its own command counts them in that file.
+const count = (file) => (existsSync(file) ? Number(readFileSync(file, 'utf8')) : 0);
+
+test('a server that stayed up long enough is given its tries back', { timeout: 240000 }, () => withWindow('wangcai-files-forgiven', countingServer, async ({ home, page, errors }) => {
+  writeFileSync(join(home, 'main.rs'), 'fn main() {}\n');
+  await openFilesWorkspace(page);
+  await goToPath(page, join(home, 'main.rs'));
+  await codeView(page, 'fn main').waitFor();
+  // The fourth server's death is what should earn one more start — the one a budget that never forgives would not make.
+  await until(() => count(attempts) >= 5, { timeout: 120000 });
+  rmSync(attempts, { force: true });
+  assert.deepEqual(errors, []);
+}));
+
+const healedOnce = join(tmpdir(), `wangcai-healed-${process.pid}-${Date.now()}`);
+// The first start of this server stays up past the window and every later start exits at once, so the starts that follow
+// are the ones a spent budget allows.
+const healedServer = rustServer(['/bin/sh', '-c', `n=$(($(cat '${healedOnce}' 2>/dev/null || echo 0)+1)); echo $n > '${healedOnce}'; [ $n -eq 1 ] && sleep 40; exit 1`]);
+
+test('a healthy server\'s death leaves the restarts after it bounded', { timeout: 240000 }, () => withWindow('wangcai-files-healed', healedServer, async ({ home, page, errors }) => {
+  writeFileSync(join(home, 'main.rs'), 'fn main() {}\n');
+  await openFilesWorkspace(page);
+  await goToPath(page, join(home, 'main.rs'));
+  await codeView(page, 'fn main').waitFor();
+  // Its death has been met by now, so the tries after it are on their way.
+  await until(() => count(healedOnce) >= 2, { timeout: 120000 });
+  // Four starts is the first server plus the three tries its death earns: the waits between them add up to about eleven
+  // seconds, and the window leaves room for all three to be spent.
+  const deadline = Date.now() + 25000;
+  while (Date.now() < deadline) await page.waitForTimeout(250);
+  assert.ok(count(healedOnce) <= 4, `started ${count(healedOnce)} times`);
+  rmSync(healedOnce, { force: true });
   assert.deepEqual(errors, []);
 }));

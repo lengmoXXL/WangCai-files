@@ -109,7 +109,7 @@ class State {
 }
 
 type Range = { start: { line: number; character: number } };
-type OpenOptions = { machine: FileClick['machine']; path: string; language: string; model: monaco.editor.ITextModel; navigate: (file: FileClick) => void; notify: (reason: string) => void };
+type OpenOptions = { machine: FileClick['machine']; path: string; language: string; model: monaco.editor.ITextModel; navigate: (file: FileClick) => void };
 
 // One language server over the plugin channel: the transport monaco's client speaks to, plus the requests
 // this plugin sends itself, and the answer to requests the client has no handler for.
@@ -121,13 +121,11 @@ class LspProxy {
   private next = 0;
   private initializing?: unknown;
   private stopped = false;
+  private retired = false;
   private uris = new Map<string, string>();
   private methods = new Set<string>();
 
-  constructor(private context: UiContext, readonly info: LspSession, readonly options: OpenOptions, private notify: (reason: string) => void) {}
-
-  // A server outlives the file that opened it, so a notice about it goes to the file its viewer last opened.
-  setNotify(notify: (reason: string) => void) { this.notify = notify; }
+  constructor(private context: UiContext, readonly info: LspSession, readonly options: OpenOptions) {}
 
   // Whether the server answers a method, which the preview's menu offers only then.
   supports(method: string) { return this.methods.has(method); }
@@ -163,10 +161,9 @@ class LspProxy {
     try {
       await this.context.ui.request('lsp-write', { session: this.info.session, data: base64(frame(message)) });
     } catch (error) {
-      // A write the node would not take is no proof the server exited: its process is closed here rather
-      // than left behind for a window that has already dropped it.
+      // A write the node would not take is no proof the server exited; the service closes it and decides from its tries
+      // whether to start another.
       this.stop((error as Error).message);
-      void this.context.ui.request('lsp-close', { session: this.info.session }).catch(() => {});
       return;
     }
     if (!this.stopped && this.state.value.state !== 'open') this.state.set({ state: 'open' });
@@ -213,13 +210,17 @@ class LspProxy {
   // A server that stopped cannot serve its session again, so the next open replaces this proxy with a new one.
   get closed() { return this.stopped; }
 
+  // A stop the window asked for is not a failure: only a server that stopped by itself is started again.
+  get unexpected() { return this.stopped && !this.retired; }
+
+  retire() { this.retired = true; }
+
   stop(reason: string) {
     if (this.stopped) return;
     this.stopped = true;
     this.state.set({ state: 'closed', error: new Error(reason) });
     for (const { reject } of this.pending.values()) reject(new Error(reason));
     this.pending.clear();
-    this.notify(reason);
   }
 
   // A link needs the model of the file it points into, so a file the window has not opened is read in first.
@@ -364,6 +365,13 @@ function outline(items: ServerSymbol[]): FileSymbol[] {
   return symbols;
 }
 
+// How long a server that stopped by itself waits before each try at starting it again: a machine that reconnected needs
+// its server back, while one that keeps dying must not be restarted forever.
+const reviveWaits = [1000, 3000, 7000];
+// How long a server has to stay up for the tries it has taken to count for nothing: one that comes up and dies again
+// inside this window is still the server that keeps dying.
+const healthyFor = 30_000;
+
 // The language servers this window drives, one monaco LSP client per server. A client is never disposed —
 // monaco's has no way to — so a server that is restarted leaves its client behind and starts another one.
 export class LanguageServices {
@@ -374,6 +382,13 @@ export class LanguageServices {
   private listeners = new Set<() => void>();
   // What a server last wrote to its error stream, which is all a user sees of why it stopped.
   private logs = new Map<string, string>();
+  // What a file whose server never came up said, and what it takes to try it again.
+  private missing = new WeakMap<monaco.editor.ITextModel, { error: string; options: OpenOptions }>();
+  // What it takes to start a session again: the options to open it with, the tries that stand since a server last
+  // stayed up, and when that server came up, which is what the tries are measured against.
+  private revivals = new Map<string, { options: OpenOptions; tries: number; upSince?: number }>();
+  // The sessions being revived now, so a server that stops again does not start a second revival of its own.
+  private reviving = new Set<string>();
 
   constructor(private context: UiContext) {
     this.off = [
@@ -395,29 +410,50 @@ export class LanguageServices {
     for (const listener of this.listeners) listener();
   }
 
-  // Starts or reuses the server for a file and connects the model to it, so the editor highlights and hovers
-  // from the same server. The notify callback reports why there is no server, or why a running one stopped.
-  async open(options: OpenOptions) {
+  // Starts or reuses the server for a file and connects the model to it, so the editor highlights and hovers from the
+  // same server. `wanted` is false when a revival asks for a session a view may have left meanwhile.
+  async open(options: OpenOptions, { wanted = true }: { wanted?: boolean } = {}) {
     const info = await this.context.ui.request<LspSession | null>('lsp-open', { machine: options.machine, path: options.path, language: options.language })
-      .catch((error: Error) => { options.notify(`语言服务未启动：${error.message}`); return null; });
-    if (!info) return;
-    let proxy = this.bySession.get(info.session);
-    // The stopped proxy is replaced here, and its log goes with it: the next server starts without the old errors.
-    if (proxy?.closed) {
-      this.logs.delete(info.session);
-      proxy = undefined;
+      .catch((error: Error) => {
+        // Only a file whose server never came up is read from this: a revival that fails still has the closed proxy the
+        // dot speaks for.
+        if (wanted) this.missing.set(options.model, { error: error.message, options });
+        return null;
+      });
+    if (!info) {
+      // Nothing runs behind this file. A view's server that could not be started was just remembered, and this is what
+      // lets the dot show it; a language with no server of its own keeps its dot away.
+      this.changed();
+      return;
     }
-    const notify = (reason: string) => {
-      const log = this.logs.get(info.session);
-      options.notify(log ? `${reason}: ${log}` : reason);
-    };
-    if (!proxy) {
-      proxy = new LspProxy(this.context, info, options, notify);
-      this.bySession.set(info.session, proxy);
-      const subscription = proxy.state.onChange(() => this.changed());
+    if (!wanted && !this.revivals.has(info.session)) {
+      // The views that asked for this server left while it was on its way, so the one just started is closed rather
+      // than kept for nobody.
+      await this.context.ui.request('lsp-close', { session: info.session }).catch(() => {});
+      return;
+    }
+    this.missing.delete(options.model);
+    // The record is put in place before the server starts, so even a server's first arrival is recorded.
+    const known = this.revivals.get(info.session);
+    const revival = known ?? { options, tries: 0 };
+    if (known) revival.options = options;
+    else this.revivals.set(info.session, revival);
+    const existing = this.bySession.get(info.session);
+    if (!existing || existing.closed) {
+      // A new proxy starts without the session's old errors, so what the last server wrote goes with it.
+      this.logs.delete(info.session);
+      // Its clock starts from nothing too: until this server comes up, the session has not been healthy at all.
+      revival.upSince = undefined;
+      const started = new LspProxy(this.context, info, options);
+      this.bySession.set(info.session, started);
+      const subscription = started.state.onChange(() => {
+        this.changed();
+        if (started.state.value.state === 'open') revival.upSince = Date.now();
+        else if (started.state.value.state === 'closed' && started.unexpected) void this.revive(info.session);
+      });
       this.off.push(() => subscription.dispose());
-      new MonacoLspClient(proxy);
-    } else proxy.setNotify(notify);
+      new MonacoLspClient(started);
+    }
     this.byModel.set(options.model, { session: info.session, options });
     this.changed();
   }
@@ -443,10 +479,14 @@ export class LanguageServices {
     return true;
   }
 
-  // What the status dot shows for one file: the server its session runs, and how that session is doing.
+  // What the status dot shows for one file: the service behind it — the server its session runs, or the reason none does.
   status(model: monaco.editor.ITextModel) {
     const found = this.lookup(model);
-    if (!found) return undefined;
+    if (!found) {
+      const missing = this.missing.get(model);
+      // The binary's own name is not known here — it was never found — so the dot names the language instead.
+      return missing && { server: missing.options.language, state: 'missing' as const, error: missing.error };
+    }
     const state = found.proxy.state.value;
     return { server: found.proxy.info.server, root: found.proxy.info.root, state: state.state, error: state.state === 'closed' ? state.error?.message : undefined, log: this.logs.get(found.view.session) };
   }
@@ -490,19 +530,48 @@ export class LanguageServices {
     return Array.isArray(answer) ? outline(answer as ServerSymbol[]) : [];
   }
 
-  // A restart replaces the server behind this file: its session is dropped here, and the file is opened again on
-  // a new server with the client this window builds for it.
+  // Starts the server behind this file: a running session is dropped and the file is opened on a new server, while a
+  // file with no server behind it is started for the first time.
   async restart(model: monaco.editor.ITextModel) {
     const found = this.lookup(model);
-    if (!found) return;
-    // A restart is not a failure, so the session being replaced reports nothing on its way out.
-    found.proxy.setNotify(() => {});
-    found.proxy.stop('语言服务已重启');
-    await this.context.ui.request('lsp-close', { session: found.view.session });
+    if (!found) {
+      const options = this.missing.get(model)?.options;
+      if (options) await this.open(options);
+      return;
+    }
+    await this.letGo(found.proxy, found.view.session, '语言服务已重启');
     if (!model.isDisposed()) await this.open(found.view.options);
   }
 
-  // No view is left to report the close, so it goes without a notice.
+  // Starts the server behind a session again: the node is told to close the one this window dropped.
+  private async revive(session: string) {
+    const revival = this.revivals.get(session);
+    if (!revival || this.reviving.has(session)) return;
+    this.reviving.add(session);
+    try {
+      if (revival.upSince !== undefined && Date.now() - revival.upSince >= healthyFor) revival.tries = 0;
+      await this.context.ui.request('lsp-close', { session }).catch(() => {});
+      for (const wait of reviveWaits.slice(revival.tries)) {
+        revival.tries++;
+        await new Promise((resolve) => setTimeout(resolve, wait));
+        // The view may have gone while this waited, and a server nobody needs is not started.
+        if (!this.revivals.has(session)) return;
+        await this.open(revival.options, { wanted: false });
+        const revived = this.bySession.get(session);
+        if (revived && !revived.closed) return;
+      }
+    } finally {
+      this.reviving.delete(session);
+    }
+  }
+
+  // The window lets a server go: it is retired, so its stop is not taken for a failure, and then closed on the node.
+  private async letGo(proxy: LspProxy, session: string, reason: string) {
+    proxy.retire();
+    proxy.stop(reason);
+    await this.context.ui.request('lsp-close', { session });
+  }
+
   async closeUnused(openFiles: FileClick[]) {
     for (const [session, proxy] of [...this.bySession]) {
       const { machine, language } = proxy.options;
@@ -513,9 +582,8 @@ export class LanguageServices {
       if (kept) continue;
       this.bySession.delete(session);
       this.logs.delete(session);
-      proxy.setNotify(() => {});
-      proxy.stop('语言服务已关闭');
-      await this.context.ui.request('lsp-close', { session });
+      this.revivals.delete(session);
+      await this.letGo(proxy, session, '语言服务已关闭');
     }
     this.changed();
   }

@@ -53,15 +53,10 @@
 .preview-lsp:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
 .preview-lsp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--wc-muted); }
 .preview-lsp.open .preview-lsp-dot { background: var(--wc-accent); }
-.preview-lsp.closed .preview-lsp-dot { background: var(--wc-yellow); }
+.preview-lsp.closed .preview-lsp-dot, .preview-lsp.missing .preview-lsp-dot { background: var(--wc-yellow); }
 .preview-lsp-detail { display: grid; gap: 3px; min-width: 160px; max-width: 320px; padding: 6px 8px; font-size: 11px; line-height: 1.4; color: var(--wc-muted); }
 .preview-lsp-name { color: var(--wc-foreground); }
 .preview-lsp-detail span { overflow-wrap: anywhere; }
-.preview-notice { flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 4px 6px; font-size: 11px; color: var(--wc-yellow); }
-.preview-notice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.preview-notice button { flex-shrink: 0; width: 18px; height: 18px; padding: 0; font: inherit; color: var(--wc-muted); background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
-.preview-notice button:hover { color: var(--wc-foreground); background: var(--wc-overlay); }
-.preview-notice button:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
 .file-message { padding: 16px; font-size: 12px; color: var(--wc-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* The page and the search picker over it: the picker is placed against this box, so a preview that changes under it

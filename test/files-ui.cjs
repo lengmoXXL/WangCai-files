@@ -129,6 +129,11 @@ const backButton = (page) => page.getByRole('button', { name: '后退', exact: t
 const forwardButton = (page) => page.getByRole('button', { name: '前进', exact: true });
 const refreshButton = (page) => page.getByRole('button', { name: '刷新', exact: true });
 
+// The dot that stands in that header for the file's language service, and the detail its hover shows: a state narrows
+// the dot to one the dot itself carries.
+const lspDot = (page, state) => page.locator(state ? `.preview-lsp.${state}` : '.preview-lsp');
+const lspDetail = (page) => page.locator('.preview-lsp-detail');
+
 // The right sidebar is shown and hidden by its own button, and added to from the button beside it.
 const sidebarToggle = (page) => page.getByRole('button', { name: '切换右侧栏' });
 const newSidebarTab = (page) => page.getByRole('button', { name: '新建侧栏标签页' });
@@ -241,6 +246,8 @@ module.exports = {
   backButton,
   forwardButton,
   refreshButton,
+  lspDot,
+  lspDetail,
   sidebarToggle,
   newSidebarTab,
   viewMenu,
