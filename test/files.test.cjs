@@ -176,7 +176,8 @@ test('view picker browses current terminal directory; file links preview code, M
   await clickLink(`${code}:2:3`);
   await previewSection.waitFor();
   assert.equal(await address.inputValue(), code);
-  assert.equal(await mode.count(), 0);
+  assert.equal(await mode.innerText(), '文本');
+  assert.equal(await mode.getAttribute('aria-haspopup'), null);
   assert.equal(await panel.locator('.preview-header').evaluate((element) => getComputedStyle(element).fontSize), '12px');
   assert.equal(await lines.evaluate((element) => getComputedStyle(element).fontSize), '12px');
   await page.screenshot({ path: 'test/output/screenshots/files-code.png' });
@@ -374,7 +375,8 @@ test('view picker browses current terminal directory; file links preview code, M
   await shownImage.waitFor();
   assert.match(await shownImage.getAttribute('src'), /^data:image\/png;base64,/);
   assert.deepEqual(await shownImage.evaluate(async (element) => { await element.decode(); return [element.naturalWidth, element.naturalHeight]; }), [1, 1]);
-  assert.equal(await mode.count(), 0);
+  assert.equal(await mode.innerText(), '文本');
+  assert.equal(await mode.getAttribute('aria-haspopup'), null);
   assert.ok(await forward.isDisabled());
   await toggle.click();
   assert.ok(await right.isHidden());

@@ -26,18 +26,21 @@
 .markdown-meta dt { color: var(--wc-muted); }
 .markdown-meta dd { margin: 0; }
 .html-frame { flex: 1; min-height: 0; border: 0; }
-.preview-header { flex-shrink: 0; display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 6px; border-bottom: 1px solid var(--wc-border); }
-.preview-arrow { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 22px; padding: 3px; color: var(--wc-muted); background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
-.preview-arrow:hover:not(:disabled) { color: var(--wc-foreground); background: var(--wc-overlay); }
-.preview-arrow:disabled { opacity: 0.35; cursor: default; }
-.preview-arrow:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
-.preview-arrow svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+.preview-header { flex-shrink: 0; display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 6px; border-bottom: 1px solid var(--wc-border); }
+/* Every icon button of the header answers to the same rules, which is why there is one class for them. */
+.preview-icon { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 24px; padding: 4px; color: var(--wc-muted); background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
+.preview-icon:hover:not(:disabled) { color: var(--wc-foreground); background: var(--wc-overlay); }
+.preview-icon:disabled { opacity: 0.35; cursor: default; }
+.preview-icon:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
+.preview-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .preview-address { flex: 1; min-width: 0; }
-.preview-path { width: 100%; height: 22px; padding: 0 4px; font: inherit; color: var(--wc-muted); background: transparent; border: 1px solid transparent; border-radius: 3px; }
+.preview-path { width: 100%; height: 24px; padding: 0 6px; font: inherit; color: var(--wc-muted); background: transparent; border: 1px solid transparent; border-radius: 4px; }
 .preview-path:focus { color: var(--wc-foreground); background: var(--wc-overlay); border-color: var(--wc-accent); outline: none; }
 .preview-modes, .preview-lsp-wrap { position: relative; flex-shrink: 0; }
-.preview-mode { display: flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; font: inherit; color: var(--wc-muted); background: transparent; border: 1px solid var(--wc-border); border-radius: 10px; cursor: pointer; }
-.preview-mode:hover { color: var(--wc-foreground); background: var(--wc-overlay); }
+/* What the page is read as: a label of the same height as the buttons beside it. */
+.preview-mode { display: flex; align-items: center; gap: 4px; flex-shrink: 0; height: 24px; padding: 0 6px; font: inherit; color: var(--wc-muted); background: transparent; border: 0; border-radius: 4px; }
+button.preview-mode { cursor: pointer; }
+button.preview-mode:hover { color: var(--wc-foreground); background: var(--wc-overlay); }
 .preview-mode:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
 .preview-mode svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.4; }
 .file-preview .menu-backdrop { position: fixed; inset: 0; z-index: 5; -webkit-app-region: no-drag; }
@@ -48,9 +51,6 @@
 .preview-menu button, .code-menu button { display: block; width: 100%; padding: 6px 8px; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 3px; text-align: left; cursor: pointer; }
 .preview-menu button:hover, .code-menu button:hover { background: var(--wc-selection); }
 .preview-menu button:focus-visible, .code-menu button:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
-.preview-lsp { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
-.preview-lsp:hover { background: var(--wc-overlay); }
-.preview-lsp:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
 .preview-lsp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--wc-muted); }
 .preview-lsp.open .preview-lsp-dot { background: var(--wc-accent); }
 .preview-lsp.closed .preview-lsp-dot, .preview-lsp.missing .preview-lsp-dot { background: var(--wc-yellow); }

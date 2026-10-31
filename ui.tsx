@@ -51,17 +51,14 @@ function Navigation({ context, file, navigate, refresh, back, forward, openPicke
   useEffect(() => { setPath(file.path); setError(''); return () => { request.current++; }; }, [file]);
   return <>
     <header className="preview-header">
-      <button className="preview-arrow" aria-label="后退" title="后退" disabled={!back} onClick={back}>
+      <button className="preview-icon" aria-label="后退" title="后退" disabled={!back} onClick={back}>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 3 2 8l5 5 M2 8h12" /></svg>
       </button>
-      <button className="preview-arrow" aria-label="前进" title="前进" disabled={!forward} onClick={forward}>
+      <button className="preview-icon" aria-label="前进" title="前进" disabled={!forward} onClick={forward}>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m9 3 5 5-5 5 M2 8h12" /></svg>
       </button>
-      <button className="preview-arrow" aria-label="刷新" title="刷新" onClick={refresh}>
+      <button className="preview-icon" aria-label="刷新" title="刷新" onClick={refresh}>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.3 6.7A5.3 5.3 0 1 0 12 12 M13.3 2.7v4h-4" /></svg>
-      </button>
-      <button className="preview-arrow" aria-label="搜索" title="搜索文件、内容与符号" onClick={openSearch}>
-        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4" /><path d="m10 10 4 4" /></svg>
       </button>
       <form className="preview-address" onSubmit={(event) => {
         event.preventDefault();
@@ -80,6 +77,9 @@ function Navigation({ context, file, navigate, refresh, back, forward, openPicke
           onKeyDown={(event) => { if (event.key === 'Escape') { request.current++; setPath(file.path); setError(''); } }} />
       </form>
       {children}
+      <button className="preview-icon" aria-label="搜索" title="搜索文件、内容与符号" onClick={openSearch}>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4" /><path d="m10 10 4 4" /></svg>
+      </button>
     </header>
     {error && <div className="file-message" role="alert">{error}</div>}
   </>;
@@ -90,6 +90,9 @@ const modeLabels: Record<Mode, string> = { text: '文本', markdown: 'Markdown �
 
 function ModeMenu({ modes, mode, select }: { modes: Mode[]; mode: Mode; select: (mode: Mode) => void }) {
   const [open, setOpen] = useState(false);
+  if (!modes.length) return null;
+  // One way to read the file is still worth naming.
+  if (modes.length === 1) return <span className="preview-mode">{modeLabels[mode]}</span>;
   return <div className="preview-modes">
     <button className="preview-mode" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>{modeLabels[mode]}
       <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" /></svg>
@@ -130,7 +133,7 @@ function LspStatus({ model }: { model?: monaco.editor.ITextModel }) {
   const status = model && services?.status(model);
   if (!model || !status) return null;
   return <div className="preview-lsp-wrap" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
-    <button className={`preview-lsp ${status.state}`} type="button" aria-label={`语言服务：${status.server}`} onClick={() => void services?.restart(model)}>
+    <button className={`preview-icon preview-lsp ${status.state}`} type="button" aria-label={`语言服务：${status.server}`} onClick={() => void services?.restart(model)}>
       <span className="preview-lsp-dot" />
     </button>
     {hover && <div className="preview-lsp-detail" role="tooltip">
@@ -584,7 +587,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
   const [model, setModel] = useState<monaco.editor.ITextModel>();
   return <section className="file-preview" aria-label="文件预览">
     <Navigation {...props}>
-      {modes.length > 1 && <ModeMenu modes={modes} mode={mode} select={setMode} />}
+      <ModeMenu modes={modes} mode={mode} select={setMode} />
       <LspStatus model={model} />
     </Navigation>
     {error ? <div className="file-message" role="alert">{error}</div>
