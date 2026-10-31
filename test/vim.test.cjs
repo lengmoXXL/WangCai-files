@@ -79,6 +79,24 @@ test('a page with more than one way to read it opens as text, and ctrl-p cycles 
   assert.deepEqual(errors, []);
 }));
 
+test('a page rendered in a frame reports the key that leaves it', { timeout: 120000 }, () => withWindow('wangcai-files-vim-frame', lists, async ({ home, page, errors }) => {
+  const file = join(home, 'page.html');
+  writeFileSync(file, '<!doctype html><html><body><h1 id="heading">Frame title</h1></body></html>');
+  collectErrors(page, errors);
+  await openFilesWorkspace(page);
+  await goToPath(page, file);
+  await codeView(page, 'Frame title').waitFor();
+  await page.keyboard.press('Control+p');
+  const frame = page.locator('.html-frame').contentFrame();
+  await frame.locator('#heading').waitFor();
+  // The frame is a document of its own, so the key is pressed inside it: the page still has to come back.
+  await frame.locator('#heading').click();
+  await page.keyboard.press('Control+p');
+  await codeView(page, 'Frame title').waitFor();
+  assert.equal(await page.locator('.html-frame').count(), 0);
+  assert.deepEqual(errors, []);
+}));
+
 test('v selects by characters, V by lines, and y takes the selection', { timeout: 120000 }, () => withWindow('wangcai-files-vim-visual', lists, async ({ home, page, errors }) => {
   const file = join(home, 'lines.ts');
   writeFileSync(file, Array.from({ length: 12 }, (_, index) => `line${index + 1}`).join('\n'));
