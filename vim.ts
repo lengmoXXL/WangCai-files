@@ -24,12 +24,15 @@ const defaults: Record<string, string> = {
 // and belong to the key pressed after them, so they are passed through.
 const passThrough = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead']);
 
+// A key as this mode reads one: the fields it looks at, and nothing else.
+export type Press = Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'altKey' | 'metaKey' | 'isComposing'>;
+
 // Whether the normal mode claims a key at all: a bare modifier belongs to the key after it, and the window's own
 // shortcuts and typing under an IME are not this mode's.
-const claimed = (event: KeyboardEvent) => !passThrough.has(event.key) && !event.metaKey && !event.altKey && !event.isComposing;
+const claimed = (event: Press) => !passThrough.has(event.key) && !event.metaKey && !event.altKey && !event.isComposing;
 
 // A key as a sequence token: a modified letter is its own token, so `<C-o>` is one and `gg` is two.
-const keyToken = (event: KeyboardEvent) => {
+const keyToken = (event: Press) => {
   if (event.ctrlKey && event.key.length === 1) return `<C-${event.key.toLowerCase()}>`;
   if (event.key === 'Escape') return '<Esc>';
   return event.key.length === 1 ? event.key : '';
@@ -49,7 +52,7 @@ const bindingsOf = (keys?: VimKeys) => {
 };
 
 // Which command one key runs on its own under a page's config, for a page that answers that key outside the editor.
-export const vimCommand = (event: KeyboardEvent, keys?: VimKeys) => {
+export const vimCommand = (event: Press, keys?: VimKeys) => {
   if (claimed(event)) return bindingsOf(keys)[keyToken(event)];
 };
 

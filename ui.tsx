@@ -16,7 +16,7 @@ import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbol
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { LanguageServices, buffer, languageFor, ownProviders, type FileSymbol } from './lsp';
-import { vimCommand, vimKeys } from './vim';
+import { vimCommand, vimKeys, type Press } from './vim';
 import { imageMime, machineKey, type FileClick, type Font, type GitHunk, type GitLines, type GitStatus, type History, type HistoryEntry, type Position, type SearchHit, type Settings, type VimKeys } from './shared';
 import './style.css';
 
@@ -121,10 +121,6 @@ function splitFrontmatter(text: string): { fields: [string, string][]; body: str
   if (!fields.length) return { fields, body: text };
   return { fields, body: text.slice(match[0].length) };
 }
-
-// Written into the page a frame shows, which is a document of its own and keeps its keys to itself otherwise: this is
-// what lets the page answer a key pressed inside it.
-const frameKeys = `<script>addEventListener('keydown', (event) => parent.postMessage({ vim: { key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey } }, '*'));</script>`;
 
 const stateLabels = { connecting: '正在启动', open: '运行中', closed: '已退出', missing: '未启动' };
 
@@ -235,7 +231,14 @@ function DiffPeek({ path, change, area, rowTop, close }: { path: string; change:
   </div>;
 }
 
-function Preview({ file, text, mode, hunks, navigate, onModel, remember, previewing, jumps, openSearch, nextMode, keys }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean; jumps: Jumps; openSearch: () => void; nextMode: () => void; keys: (event: KeyboardEvent) => void }) {
+// A key the page answers: a press, with whether the page already took it and which element received it.
+type KeyPress = Press & { defaultPrevented: boolean; target: EventTarget | null };
+
+// Carried along with the page a frame shows: the script reports each key pressed to this window. The fields are those of
+// a `KeyPress` but the target, a node of the frame's own document, so a field added to `KeyPress` belongs here too.
+const frameReporter = `<script>addEventListener('keydown', (event) => parent.postMessage({ vim: { key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, isComposing: event.isComposing, defaultPrevented: event.defaultPrevented } }, '*'));</script>`;
+
+function Preview({ file, text, mode, hunks, navigate, onModel, remember, previewing, jumps, openSearch, nextMode, answerKey }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean; jumps: Jumps; openSearch: () => void; nextMode: () => void; answerKey: (event: KeyPress) => boolean }) {
   const element = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   // The preview document asks for its content as soon as it loads, so the listener has to be in place first.
@@ -243,18 +246,23 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
     if (mode !== 'html') return;
     const deliver = (event: MessageEvent) => {
       const target = frame.current?.contentWindow;
-      if (target && event.data === preview.message && event.source === target) target.postMessage(text + frameKeys, '*');
-    };
-    // A frame is a document of its own, so a key pressed in it is its to report: this is where the page takes it.
-    const report = (event: MessageEvent) => {
-      const target = frame.current?.contentWindow;
-      if (!target || event.source !== target || typeof event.data !== 'object' || event.data?.vim === undefined) return;
-      keys({ ...event.data.vim, defaultPrevented: false, target: null, preventDefault: () => undefined } as KeyboardEvent);
+      if (target && event.data === preview.message && event.source === target) target.postMessage(text + frameReporter, '*');
     };
     addEventListener('message', deliver);
-    addEventListener('message', report);
-    return () => { removeEventListener('message', deliver); removeEventListener('message', report); };
+    return () => removeEventListener('message', deliver);
   }, [mode, text]);
+  // Only this frame's report counts here: any window can post a message of that shape.
+  useEffect(() => {
+    if (mode !== 'html') return;
+    const report = (event: MessageEvent) => {
+      const target = frame.current?.contentWindow;
+      const press = event.data?.vim;
+      if (!target || event.source !== target || !press) return;
+      answerKey({ ...press, target: null });
+    };
+    addEventListener('message', report);
+    return () => removeEventListener('message', report);
+  }, [mode]);
   const control = useRef<monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
   // The marks of the decorations on screen, which is what a gutter click resolves against.
   const marks = useRef<GitMark[]>([]);
@@ -610,17 +618,18 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
   // A file with a text view opens as that text.
   const [mode, setMode] = useState<Mode>('text');
   const nextMode = () => setMode((current) => modes[(modes.indexOf(current) + 1) % modes.length]);
-  // A rendered view has no editor to hold the keys of the normal mode, so the one key that leaves it is taken here; the
-  // editor's own keys answer first, which is what `defaultPrevented` reports.
-  const keys = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || writing(event.target) || vimCommand(event, vimSettings) !== 'vim.nextMode') return;
-    event.preventDefault();
+  // A rendered view has no editor to hold the keys of the normal mode, so the one key that leaves it is taken here.
+  const answerKey = (event: KeyPress) => {
+    if (event.defaultPrevented || writing(event.target) || vimCommand(event, vimSettings) !== 'vim.nextMode') return false;
     nextMode();
+    return true;
   };
+  // The editor's own keys answer first, which is what `defaultPrevented` reports.
   useEffect(() => {
     if (modes.length < 2) return;
-    addEventListener('keydown', keys);
-    return () => removeEventListener('keydown', keys);
+    const onKeyDown = (event: KeyboardEvent) => { if (answerKey(event)) event.preventDefault(); };
+    addEventListener('keydown', onKeyDown);
+    return () => removeEventListener('keydown', onKeyDown);
   }, [modes.length]);
   const [model, setModel] = useState<monaco.editor.ITextModel>();
   return <section className="file-preview" aria-label="文件预览">
@@ -631,7 +640,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
     {error ? <div className="file-message" role="alert">{error}</div>
       : text === undefined ? <div className="file-message">正在读取…</div>
       : image ? <div className="image-preview"><img src={text} alt={file.path} /></div>
-      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} previewing={previewing} jumps={jumps} openSearch={openSearch} nextMode={nextMode} keys={keys} />}
+      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} previewing={previewing} jumps={jumps} openSearch={openSearch} nextMode={nextMode} answerKey={answerKey} />}
   </section>;
 }
 

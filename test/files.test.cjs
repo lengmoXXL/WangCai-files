@@ -4,7 +4,7 @@ const { mkdirSync, rmSync, statSync, writeFileSync } = require('node:fs');
 const { basename, join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { activeTerminal, createWorkspace, openView, serveRenderer, until, viewTabs, withHome, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { backButton, clickFile, codeView, collectErrors, columnOf, columns, desktopMain, drawnCloseButtons, editorLines, emptyDirectory, entry, filePicker, filePreview, filesPanels, filesTab, filesTabPanel, forwardButton, goToPath, goToPathEntry, lists, machine, markdownDivider, markdownPage, markdownPane, markdownScroll, modeButton, newSidebarTab, openWorkspaces, pathBox, previewMenu, previewMode, previewModes, refreshButton, renderedInMarkdown, renderedPage, runIn, shownPanel, sidebarRight, sidebarToggle, storedHistory, terminalRow, viewMenu, waitForPath, workspaceBar, workspaceTabs } = require('./files-ui.cjs');
+const { backButton, clickFile, codeView, collectErrors, columnOf, columns, desktopMain, drawnCloseButtons, editorLines, emptyDirectory, entry, filePicker, filePreview, filesPanels, filesTab, filesTabPanel, forwardButton, goToPath, goToPathEntry, htmlFrame, lists, machine, markdownDivider, markdownPage, markdownPane, markdownScroll, modeButton, newSidebarTab, openWorkspaces, pathBox, previewMenu, previewMode, previewModes, refreshButton, renderedInMarkdown, renderedPage, runIn, shownPanel, sidebarRight, sidebarToggle, storedHistory, terminalRow, viewMenu, waitForPath, workspaceBar, workspaceTabs } = require('./files-ui.cjs');
 
 test('view picker browses current terminal directory; file links preview code, Markdown, HTML and images', { timeout: 180000 }, () => withHome('wangcai-files', lists, async ({ home, env, open }) => {
   let { desktop, page, close } = await open();
@@ -330,11 +330,10 @@ test('view picker browses current terminal directory; file links preview code, M
   await page.screenshot({ path: 'test/output/screenshots/files-preview.png' });
   await clickLink(pathToFileURL(html).href, { label: 'HTML_LINK' });
   await previewMode(panel, 'HTML 预览');
-  const htmlFrame = panel.locator('.html-frame');
-  const renderedFrame = htmlFrame.contentFrame();
+  const renderedFrame = htmlFrame(panel).contentFrame();
   await renderedFrame.locator('#heading[data-scripted=yes]').waitFor();
   assert.equal(await renderedFrame.locator('#heading').innerText(), 'Rendered page');
-  assert.equal(await htmlFrame.getAttribute('sandbox'), 'allow-scripts');
+  assert.equal(await htmlFrame(panel).getAttribute('sandbox'), 'allow-scripts');
   const htmlBody = renderedFrame.locator('body');
   assert.equal(await htmlBody.evaluate((element) => getComputedStyle(element).fontSize), '13px');
   assert.match(await htmlBody.evaluate((element) => getComputedStyle(element).fontFamily), /DejaVuSansM Nerd Font Mono/);

@@ -79,6 +79,9 @@ const markdownScroll = (panel) => markdownPage(panel).locator('pre');
 const markdownPane = (panel) => panel.locator('.markdown-pane');
 const markdownDivider = (panel) => panel.locator('.markdown-divider');
 
+// The frame an HTML page is shown in.
+const htmlFrame = (panel) => panel.locator('.html-frame');
+
 // The menu a panel's switch opens, the modes it lists, and the switch to one of them.
 const previewMenu = (panel) => panel.getByRole('menu', { name: '预览方式' });
 const previewModes = async (panel) => {
@@ -239,6 +242,7 @@ module.exports = {
   markdownScroll,
   markdownPane,
   markdownDivider,
+  htmlFrame,
   previewMenu,
   previewModes,
   previewMode,

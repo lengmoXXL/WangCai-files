@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { codeView, collectErrors, cursorLine, dismissSearch, editorLines, goToPath, lists, lspDot, markdownPage, openFilesWorkspace, pathBox, previewMode, renderedPage, searchPanel, shownPanel, waitForLine, waitForPath } = require('./files-ui.cjs');
+const { codeView, collectErrors, cursorLine, dismissSearch, editorLines, goToPath, htmlFrame, lists, lspDot, markdownPage, openFilesWorkspace, pathBox, previewMode, renderedInMarkdown, renderedPage, searchPanel, shownPanel, waitForLine, waitForPath } = require('./files-ui.cjs');
 
 // What `y` takes is read where it goes: the clipboard.
 const taken = (page, text) => until(async () => (await page.evaluate(() => navigator.clipboard.readText())) === text);
@@ -67,13 +67,8 @@ test('a page with more than one way to read it opens as text, and ctrl-p cycles 
   await page.keyboard.press('Control+p');
   await page.waitForTimeout(300);
   assert.equal(await markdownPage(page).count(), 0);
-  // The type control the header offers is the other way back out of a rendered page, both in and out.
-  await previewMode(shownPanel(page), 'Markdown 预览');
-  await renderedPage(page, 'Notes title').waitFor();
-  await page.keyboard.press('Control+p');
-  await codeView(page, '# Notes title').waitFor();
-  await previewMode(shownPanel(page), 'Markdown 预览');
-  await renderedPage(page, 'Notes title').waitFor();
+  // The type control the header offers takes the page into a rendered view and back out of it.
+  await renderedInMarkdown(shownPanel(page), 'Notes title');
   await previewMode(shownPanel(page), '文本');
   await codeView(page, '# Notes title').waitFor();
   assert.deepEqual(errors, []);
@@ -82,18 +77,17 @@ test('a page with more than one way to read it opens as text, and ctrl-p cycles 
 test('a page rendered in a frame reports the key that leaves it', { timeout: 120000 }, () => withWindow('wangcai-files-vim-frame', lists, async ({ home, page, errors }) => {
   const file = join(home, 'page.html');
   writeFileSync(file, '<!doctype html><html><body><h1 id="heading">Frame title</h1></body></html>');
-  collectErrors(page, errors);
   await openFilesWorkspace(page);
   await goToPath(page, file);
   await codeView(page, 'Frame title').waitFor();
   await page.keyboard.press('Control+p');
-  const frame = page.locator('.html-frame').contentFrame();
+  const frame = htmlFrame(page).contentFrame();
   await frame.locator('#heading').waitFor();
-  // The frame is a document of its own, so the key is pressed inside it: the page still has to come back.
+  // Pressed inside the frame, not at the window: the page still has to come back.
   await frame.locator('#heading').click();
   await page.keyboard.press('Control+p');
   await codeView(page, 'Frame title').waitFor();
-  assert.equal(await page.locator('.html-frame').count(), 0);
+  assert.equal(await htmlFrame(page).count(), 0);
   assert.deepEqual(errors, []);
 }));
 
