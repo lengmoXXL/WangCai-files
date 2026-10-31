@@ -16,7 +16,8 @@ import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbol
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { LanguageServices, buffer, languageFor, ownProviders, type FileSymbol } from './lsp';
-import { imageMime, machineKey, type FileClick, type Font, type GitHunk, type GitLines, type GitStatus, type History, type HistoryEntry, type Position, type SearchHit, type Settings } from './shared';
+import { vimKeys } from './vim';
+import { imageMime, machineKey, type FileClick, type Font, type GitHunk, type GitLines, type GitStatus, type History, type HistoryEntry, type Position, type SearchHit, type Settings, type VimKeys } from './shared';
 import './style.css';
 
 export const title = '文件';
@@ -24,6 +25,7 @@ let activeWorkspaceId: string | undefined;
 let preview: { url: string; message: string };
 let font: Font;
 let editorLineHeight = 0;
+let vimSettings: VimKeys | undefined;
 const histories = new Map<string, History>();
 // The window's language servers, which mount() starts and every tab shares.
 let services: LanguageServices | undefined;
@@ -37,6 +39,9 @@ const watch = (context: UiContext, machine: FileClick['machine'], holder: string
 };
 
 type Remember = (entry: HistoryEntry, at: Partial<Position>) => void;
+// A position a jump left or landed on.
+type Jump = { path: string; line: number; column: number };
+type Jumps = { entries: Jump[]; index: number };
 type NavigationProps = { context: UiContext; file: HistoryEntry; navigate: (file: FileClick) => void; refresh: () => void; back?: () => void; forward?: () => void; openPicker: () => void; openSearch: () => void };
 
 function Navigation({ context, file, navigate, refresh, back, forward, openPicker, openSearch, children }: NavigationProps & { children?: ReactNode }) {
@@ -223,7 +228,7 @@ function DiffPeek({ path, change, area, rowTop, close }: { path: string; change:
   </div>;
 }
 
-function Preview({ file, text, mode, hunks, navigate, onModel, remember, previewing }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean }) {
+function Preview({ file, text, mode, hunks, navigate, onModel, remember, previewing, jumps }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean; jumps: Jumps }) {
   const element = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   // The preview document asks for its content as soon as it loads, so the listener has to be in place first.
@@ -289,11 +294,64 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
       model, theme: 'wangcai', readOnly: true, domReadOnly: true,
       automaticLayout: true, minimap: { enabled: false }, scrollBeyondLastLine: false,
       fontSize: font.size, lineHeight: editorLineHeight, fontFamily: font.family, lineNumbersMinChars: 3, renderLineHighlight: 'none',
+      // The caret is a block that holds still, which is how a reader of the normal mode expects to see it.
+      cursorStyle: 'block', cursorBlinking: 'solid',
       ariaLabel: '代码预览', contextmenu: false,
     });
     control.current = editor;
     const scrolled = editor.onDidScrollChange(() => remember(shown.current, { top: editor.getScrollTop() }));
     const moved = editor.onDidChangeCursorPosition(({ position }) => remember(shown.current, { line: position.lineNumber, column: position.column }));
+    // A landing position in the file shown moves the caret; one in another file opens that file at its line.
+    const jumpTo = (target: Jump) => {
+      if (target.path === file.path) {
+        const position = new monaco.Position(target.line, target.column);
+        editor.setPosition(position);
+        editor.revealPositionInCenterIfOutsideViewport(position);
+        return;
+      }
+      navigate({ type: 'file', machine: file.machine, path: target.path, line: target.line, column: target.column });
+    };
+    const walk = (by: number) => {
+      const at = jumps.index + by;
+      const target = jumps.entries[at];
+      if (!target) return;
+      jumps.index = at;
+      jumpTo(target);
+    };
+    // A jump leaves its starting position and its landing one in the list, and a jump made after going back starts the
+    // list over from the position it was made at.
+    const jumped = (origin: Jump, target: Jump) => {
+      jumps.entries.length = jumps.index + 1;
+      for (const entry of [origin, target]) {
+        // Walking the list must not stop twice in one place.
+        const last = jumps.entries[jumps.entries.length - 1];
+        if (!last || last.path !== entry.path || last.line !== entry.line || last.column !== entry.column) jumps.entries.push(entry);
+      }
+      jumps.index = jumps.entries.length - 1;
+    };
+    // `gd` asks this file's server where the name under the caret is defined, and jumps there. An answer that only names
+    // this file is the import a name came in through, which a server that has read the program answers differently, so a
+    // short round of asking again is worth the wait; a name declared here keeps answering the same line.
+    const definition = async () => {
+      const position = editor.getPosition();
+      const current = editor.getModel();
+      const proxy = current && services?.for(current);
+      if (!position || !current || !proxy) return;
+      const here = current.uri.toString(true).toLowerCase();
+      const elsewhere = (locations: monaco.languages.Location[]) => locations.some((location) => location.uri.toString(true).toLowerCase() !== here);
+      const found = await proxy.settled(() => proxy.definition(current, position), elsewhere, 3);
+      const first = found[0];
+      if (!first) return;
+      const origin: Jump = { path: file.path, line: position.lineNumber, column: position.column };
+      const target: Jump = { path: first.uri.path, line: first.range.startLineNumber, column: first.range.startColumn };
+      jumped(origin, target);
+      jumpTo(target);
+    };
+    // The page answers vim-style keys while its text has the keyboard; the picker's box and monaco's own widgets keep theirs.
+    const vim = vimKeys(editor, {
+      keys: vimSettings, jumpBack: () => walk(-1), jumpForward: () => walk(1), definition,
+      copy: (text) => void navigator.clipboard.writeText(text).catch(() => undefined),
+    });
     const opened = editor.onMouseDown((event) => {
       // A click on a gutter mark opens the block it stands for.
       if (event.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS) return;
@@ -322,7 +380,7 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
     return () => {
       host.removeEventListener('contextmenu', openMenu);
       control.current = undefined;
-      scrolled.dispose(); moved.dispose(); opened.dispose(); editor.dispose(); onModel(undefined);
+      scrolled.dispose(); moved.dispose(); opened.dispose(); vim.dispose(); editor.dispose(); onModel(undefined);
     };
   }, [text, mode, remember]);
   // Every open, and every rebuild of the editor, puts the caret and the keyboard in the preview — unless the page is
@@ -486,8 +544,8 @@ function MarkdownPage({ text, top, remember }: { text: string; top?: number; rem
   </div>;
 }
 
-function FileView(props: NavigationProps & { holder: string; remember: Remember; previewing: boolean }) {
-  const { context, file, holder, navigate, remember, previewing } = props;
+function FileView(props: NavigationProps & { holder: string; remember: Remember; previewing: boolean; jumps: Jumps }) {
+  const { context, file, holder, navigate, remember, previewing, jumps } = props;
   const [text, setText] = useState<string>();
   const [error, setError] = useState('');
   const [hunks, setHunks] = useState<GitHunk[]>([]);
@@ -532,7 +590,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
     {error ? <div className="file-message" role="alert">{error}</div>
       : text === undefined ? <div className="file-message">正在读取…</div>
       : image ? <div className="image-preview"><img src={text} alt={file.path} /></div>
-      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} previewing={previewing} />}
+      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} previewing={previewing} jumps={jumps} />}
   </section>;
 }
 
@@ -839,7 +897,7 @@ function Search({ context, visited, workspace, peek, navigate, close }: { contex
 
 // `file` is what the page shows, which a picker's selection may stand in for; `visited` is the entry the tab is on,
 // which the picker anchors to — the file whose symbols it lists, and the directory it searches in.
-function BrowserView({ context, workspaceId, holder, file, visited, picking, searching, remember, closeSearch, peek, ...navigation }: Omit<NavigationProps, 'file'> & { workspaceId?: string; holder: string; file?: HistoryEntry; visited?: HistoryEntry; picking: boolean; searching: boolean; remember: Remember; closeSearch: () => void; peek: (file: FileClick) => void }) {
+function BrowserView({ context, workspaceId, holder, file, visited, picking, searching, remember, jumps, closeSearch, peek, ...navigation }: Omit<NavigationProps, 'file'> & { workspaceId?: string; holder: string; file?: HistoryEntry; visited?: HistoryEntry; picking: boolean; searching: boolean; remember: Remember; jumps: Jumps; closeSearch: () => void; peek: (file: FileClick) => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [workspace, setWorkspace] = useState('');
@@ -870,7 +928,7 @@ function BrowserView({ context, workspaceId, holder, file, visited, picking, sea
   return <div className={searching ? 'browser-view searching' : 'browser-view'}>
     {file.type === 'directory' || picking
       ? <Picker key={pickerKey} context={context} file={file} workspace={workspace} holder={holder} {...navigation} />
-      : <FileView key={key} context={context} file={file} holder={holder} remember={remember} previewing={searching} {...navigation} />}
+      : <FileView key={key} context={context} file={file} holder={holder} remember={remember} jumps={jumps} previewing={searching} {...navigation} />}
     {visited && searching && <Search context={context} visited={visited} workspace={workspace} peek={peek} navigate={navigation.navigate} close={closeSearch} />}
   </div>;
 }
@@ -885,16 +943,24 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
   const key = workspaceId ?? '';
   const history = histories.get(key) ?? { entries: [], index: -1 };
   histories.set(key, history);
+  // Kept on the tab so it outlives the page each jump lands on.
+  const jumps: Jumps = { entries: [], index: -1 };
   // What the tab shows on top of the page the history points at: the two pickers, and the file a picker's selection
   // stands for, which is shown without being visited.
   const view: { picking: boolean; searching: boolean; preview?: FileClick } = { picking: false, searching: false };
   const push = (file: FileClick) => {
     const current = history.entries[history.index];
-    if (!current || current.machine.id !== file.machine.id || current.machine.host !== file.machine.host || current.type !== file.type || current.path !== file.path || current.line !== file.line || current.column !== file.column) {
-      history.entries = [...history.entries.slice(0, history.index + 1), file];
-      history.index++;
-      void context.ui.request('save-history', Object.fromEntries(histories));
-    } else history.entries[history.index] = file;
+    const same = current && machineKey(current.machine) === machineKey(file.machine) && current.type === file.type && current.path === file.path;
+    // A file opened without a line is the visit already there, which keeps where it was left; a jump to a line of it is a
+    // visit of its own, so going back returns to the line it left.
+    if (same && (file.line === undefined || (file.line === current.line && file.column === current.column))) {
+      // The view reads a new entry as a new visit, which is what puts back the path the address box was typed over.
+      history.entries[history.index] = { ...current };
+      return;
+    }
+    history.entries = [...history.entries.slice(0, history.index + 1), file];
+    history.index++;
+    void context.ui.request('save-history', Object.fromEntries(histories));
   };
   if (file) push(file);
   context.host.tabs({ id: 'directory', title: '文件', workspaceId, onClose() {
@@ -935,6 +1001,7 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
     const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} holder={key} file={view.preview ?? history.entries[history.index]} visited={history.entries[history.index]} picking={view.picking} searching={view.searching}
       navigate={navigate}
       remember={remember}
+      jumps={jumps}
       openPicker={openPicker}
       openSearch={openSearch}
       closeSearch={closeSearch}
@@ -984,6 +1051,7 @@ function editorTheme(theme: Theme): monaco.editor.IStandaloneThemeData {
 export async function mount(_container: HTMLElement, context: UiContext) {
   const profile: Settings = context.host.config;
   font = profile.font;
+  vimSettings = profile.vim?.keys;
   editorLineHeight = font.lineHeight ? Math.round(font.size * font.lineHeight) : 0;
   preview = context.host.preview;
   monaco.editor.defineTheme('wangcai', editorTheme(profile.theme));

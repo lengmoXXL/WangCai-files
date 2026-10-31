@@ -14,6 +14,8 @@ export const config = {
   // Per-language entries from init.ts, keyed by Monaco language: a command and markers replace the defaults
   // below, false turns the language off, and a language that is not named here keeps its default.
   lsp: { type: 'object' },
+  // The keys the preview answers to.
+  vim: { type: 'object' },
 };
 
 type LanguageServer = { commands: string[][]; markers: string[] };

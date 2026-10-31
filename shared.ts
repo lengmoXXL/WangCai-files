@@ -31,7 +31,12 @@ export const machineKey = (machine: FileClick['machine']) => `${machine.id}|${ma
 // The config this plugin accepts: main.ts declares a schema for the same fields.
 export type Font = { family: string; size: number; lineHeight?: number };
 type ServerOverride = { command?: string[]; markers?: string[] };
-export type Settings = Profile & { font: Font; lsp?: Record<string, ServerOverride | false> };
+export type VimKeys = Record<string, string | false>;
+export type Settings = Profile & {
+  font: Font;
+  lsp?: Record<string, ServerOverride | false>;
+  vim?: { keys?: VimKeys };
+};
 
 // Chromium renders these straight from a data URL.
 const imageTypes: Record<string, string> = {

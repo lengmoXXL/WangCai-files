@@ -256,6 +256,18 @@ class LspProxy {
     return locations;
   }
 
+  // A question is asked again while its answer is not one the caller can use, for as many rounds as the caller is willing
+  // to wait. A server that has not been told a document is open answers nothing about it, which is indistinguishable from
+  // a file with no symbols and from a name with no definition.
+  async settled<T>(ask: () => Promise<T>, acceptable: (answer: T) => boolean, rounds = 10): Promise<T> {
+    let answer = await ask();
+    for (let round = 0; round < rounds && !acceptable(answer) && this.state.value.state !== 'closed'; round++) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      answer = await ask();
+    }
+    return answer;
+  }
+
   definition(model: monaco.editor.ITextModel, position: monaco.Position) {
     return this.locations(model, position, ownProviders.definitionProvider);
   }
@@ -519,14 +531,9 @@ export class LanguageServices {
   async symbols(model: monaco.editor.ITextModel): Promise<FileSymbol[] | undefined> {
     const proxy = await this.proxyFor(model);
     if (!proxy) return undefined;
-    // A server that has not been told the document is open yet lists nothing at all, which is indistinguishable from a
-    // file without symbols, so an empty answer is asked again for as long as that handshake takes.
     const ask = () => proxy.request('textDocument/documentSymbol', { textDocument: { uri: model.uri.toString(true) } }).catch(() => undefined);
-    let answer = await ask();
-    for (let attempt = 0; attempt < 4 && Array.isArray(answer) && !answer.length; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      answer = await ask();
-    }
+    // An empty list is the only answer still saying the document is not read yet.
+    const answer = await proxy.settled(ask, (result) => !Array.isArray(result) || result.length > 0);
     return Array.isArray(answer) ? outline(answer as ServerSymbol[]) : [];
   }
 
