@@ -19,6 +19,10 @@ const defaults: Record<string, string> = {
   ';': 'vim.seekAgain', ',': 'vim.seekAgainBack',
 };
 
+// A modifier on its own, a lock, or the dead key an input method starts with: keys that produce nothing by themselves
+// and belong to the key pressed after them, so they are passed through.
+const passThrough = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead']);
+
 // A sequence is a run of keys a reader presses: `gg` is two of them, `<C-o>` is one.
 const tokens = (sequence: string) => sequence.match(/<[^>]+>|./gu) ?? [];
 
@@ -129,7 +133,7 @@ export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}
   let awaiting: ((char: string) => void) | undefined;
   // What `;` repeats, and `,` the other way round.
   let lastSeek: { char: string; ahead: boolean; till: boolean } | undefined;
-  // A seek waiting for its character ends at any key that is not one.
+  // A seek waiting for its character ends at any key that is not one. The keys the mode passes through never reach it.
   const endSeek = () => { awaiting = undefined; };
   const seeker = (ahead: boolean, till: boolean) => (times: number) => {
     awaiting = (char) => {
@@ -183,6 +187,7 @@ export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}
   let node = root;
   let count = 0;
   const onKeyDown = (event: KeyboardEvent) => {
+    if (passThrough.has(event.key)) return;
     // The window's own shortcuts, and typing that belongs to whatever widget holds it, are not this mode's.
     if (event.metaKey || event.altKey || event.isComposing || !editor.hasTextFocus()) { endSeek(); return; }
     const token = tokenOf(event);

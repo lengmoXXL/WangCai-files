@@ -84,7 +84,14 @@ test('f finds a character on the line, and t stops one short of it', { timeout: 
   await page.keyboard.press('X');
   await page.keyboard.press('y');
   await taken(page, 'abcX');
+  // A capital comes with a `Shift` keydown of its own, which must leave the seek waiting for the character.
+  await page.keyboard.press('f');
+  await page.keyboard.press('Shift+X');
+  await page.keyboard.press('v');
+  await page.keyboard.press('y');
+  await taken(page, 'X');
   // A count reaches the second X, and `t` stops one short of it.
+  await page.keyboard.press('0');
   await page.keyboard.press('v');
   await page.keyboard.press('2');
   await page.keyboard.press('f');
