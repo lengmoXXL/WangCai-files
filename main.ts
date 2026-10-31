@@ -4,6 +4,8 @@ import type { MachineConnection, Process } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { imageMime, machineKey, type FileClick, type GitHunk, type GitLetter, type GitLines, type GitStatus, type History, type LspData, type SearchHit, type Settings } from './shared';
 
+export const keys = { '<leader>ff': { global: true, desc: '打开文件视图', event: 'core:show-view', data: { plugin: 'files' } } };
+
 // Fields this plugin takes from init.ts.
 export const config = {
   font: {
