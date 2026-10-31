@@ -1,9 +1,9 @@
 # 旺财文件视图（files）
 
-旺财右侧的文件视图：目录浏览、代码预览（Monaco + 语言服务）、Markdown / HTML / 图片预览，
-以及一个搜文件、搜内容、搜符号的面板。
+旺财右侧的文件视图：目录浏览、文本预览（Monaco + 语言服务），以及一个搜文件、搜内容、搜符号的面板。
 
-文本、Markdown 与 HTML 都先以文本打开；有多种读法的文件在地址栏右侧写着当前是哪一种，点一下可以换。
+它会读一切能被当成文本的东西（代码、Markdown、HTML、JSON……），只按文字显示；
+图片、渲染后的 Markdown 与 HTML 页面都归 preview 插件。
 
 ## 配置
 
@@ -12,6 +12,8 @@
 ```ts
 tabs: [
   { id: 'files', config: { font: { size: 13 } } },
+  // `<C-p>` 把文件交给 preview 插件，所以它也要在列表里。
+  { id: 'preview' },
   { id: 'terminal' },
 ],
 ```
@@ -20,8 +22,8 @@ tabs: [
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `family` | `"DejaVuSansM Nerd Font Mono", monospace` | 页面与代码的字体 |
-| `size` | `12` | 字号 |
+| `family` | `"DejaVuSansM Nerd Font Mono", monospace` | 面板与代码的字体 |
+| `size` | `12` | 代码的字号（面板文字固定 12px） |
 | `lineHeight` | 编辑器默认 | 行高倍数，乘 `size` |
 
 ### `lsp`
@@ -62,8 +64,8 @@ config: {
 
 ### `vim.keys`
 
-代码预览按 vim 的常规模式读，只读，没有插入模式。键只在代码预览里、且代码文本拿着键盘时生效；
-切到 Markdown / HTML 预览时，就只剩 `<C-p>` 还在。
+文本预览按 vim 的常规模式读，只读，没有插入模式。键只在文本预览里、且代码文本拿着键盘时生效。
+例外是 `<C-p>`：焦点不在任何输入框里时它仍然有效——比如焦点在页头的按钮或插件自己的标签页与列表上。
 
 默认的键与动作：
 
@@ -77,7 +79,7 @@ config: {
 | `zz` `zt` `zb` | 当前行居中、置顶、置底 |
 | `/` `n` `N` | 编辑器内查找，下一个、上一个匹配 |
 | `<C-f>` | 文件、内容、符号的搜索面板 |
-| `<C-p>` | 换一种方式读这个文件（有多种读法时）：文本、Markdown 预览、HTML 预览 |
+| `<C-p>` | 交给 preview 插件 |
 | `gd` | 跳到光标下名字的定义 |
 | `<C-o>` `<C-i>` | 在跳转过的位置之间后退、前进（跨文件，回到原来那一行） |
 | `f` `F` `t` `T` | 行内找字符，`F` `T` 反向，`t` `T` 停在字符旁边而不落到它上面 |
@@ -101,7 +103,7 @@ config: {
 | `vim.center` `vim.top` `vim.bottom` | 当前行居中、置顶、置底 |
 | `vim.definition` | 跳到定义 |
 | `vim.search` | 打开搜索面板 |
-| `vim.nextMode` | 换一种读法 |
+| `vim.preview` | 把当前显示的文件发给 preview 插件，并把它的标签页调到前面 |
 | `vim.jumpBack` `vim.jumpForward` | 跳转位置的后退与前进 |
 | `vim.seek` `vim.seekBack` `vim.seekTill` `vim.seekTillBack` | 行内找字符的四种 |
 | `vim.seekAgain` `vim.seekAgainBack` | 重复上一次找字符，后者反方向 |

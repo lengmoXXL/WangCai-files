@@ -3,6 +3,9 @@ const { createWorkspace, openView, until } = require('@lengmoxxl/wangcai-testkit
 // The machine the window works on, which is the one a case's paths are read from.
 const machine = { id: 'local', name: '本机' };
 
+// A one-pixel picture: what this plugin cannot read as text, and what the preview plugin draws.
+const picture = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+
 // What a case's window lists: the workspace a file link comes from, and the views the sidebar picks from.
 const lists = { workspaces: ['terminal-agent'], tabs: ['files', 'terminal'] };
 
@@ -50,13 +53,11 @@ const sidebarRight = (page) => page.locator('.sidebar-right');
 const desktopMain = (page) => page.locator('.desktop-main');
 const shownPanel = (page) => page.locator('.sidebar-panel:visible');
 const filesPanels = (page) => page.locator('.sidebar-panel[data-plugin=files]');
+const previewPanels = (page) => page.locator('.sidebar-panel[data-plugin=preview]');
 
 // The two sections the plugin draws: the file it previews, and the picker for choosing one.
 const filePreview = (page) => page.getByLabel('文件预览', { exact: true });
 const filePicker = (page) => page.getByLabel('文件选择', { exact: true });
-
-// The page a panel renders, waited for by the heading that page carries.
-const renderedPage = (scope, name) => scope.getByRole('heading', { name });
 
 // The window's errors, which the cases collect and assert are empty.
 const collectErrors = (page, errors) => {
@@ -70,34 +71,6 @@ const storedHistory = (page) => page.evaluate(() => window.wangcai.call('request
 
 // A file link clicked in a terminal. The plugin subscribes as it mounts, so a click sent before that is gone.
 const clickFile = (page, file) => page.evaluate((click) => window.wangcai.call('publish', 'onclick', click), file);
-
-// The parts of a panel that shows a page: the mode button, the page it renders, the block inside that page which
-// scrolls sideways, the pane both sit in, and the divider the page is dragged by.
-const modeButton = (panel) => panel.locator('.preview-mode');
-const markdownPage = (panel) => panel.locator('.markdown-preview');
-const markdownScroll = (panel) => markdownPage(panel).locator('pre');
-const markdownPane = (panel) => panel.locator('.markdown-pane');
-const markdownDivider = (panel) => panel.locator('.markdown-divider');
-
-// The frame an HTML page is shown in.
-const htmlFrame = (panel) => panel.locator('.html-frame');
-
-// The menu a panel's switch opens, the modes it lists, and the switch to one of them.
-const previewMenu = (panel) => panel.getByRole('menu', { name: '预览方式' });
-const previewModes = async (panel) => {
-  await modeButton(panel).click();
-  return previewMenu(panel).getByRole('menuitem').allInnerTexts();
-};
-const previewMode = async (panel, mode) => {
-  const modes = await previewModes(panel);
-  await previewMenu(panel).getByRole('menuitem', { name: mode, exact: true }).click();
-  return modes;
-};
-// A page that can be rendered opens as its text, so the rendered one is asked for before it is read.
-const renderedInMarkdown = async (scope, name) => {
-  await previewMode(scope, 'Markdown 预览');
-  await renderedPage(scope, name).waitFor();
-};
 
 // The panel the 文件 tab shows, and the address box above it.
 const filesTabPanel = (page) => page.getByRole('tabpanel', { name: '文件' });
@@ -209,6 +182,7 @@ const closeWorkspace = async (tab) => {
 
 module.exports = {
   machine,
+  picture,
   lists,
   boxOf,
   terminalRow,
@@ -230,23 +204,13 @@ module.exports = {
   desktopMain,
   shownPanel,
   filesPanels,
+  previewPanels,
   filePreview,
   filePicker,
-  renderedPage,
   collectErrors,
   openWorkspaces,
   storedHistory,
   clickFile,
-  modeButton,
-  markdownPage,
-  markdownScroll,
-  markdownPane,
-  markdownDivider,
-  htmlFrame,
-  previewMenu,
-  previewModes,
-  previewMode,
-  renderedInMarkdown,
   filesTabPanel,
   pathBox,
   goToPath,

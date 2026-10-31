@@ -1,6 +1,9 @@
 import * as monaco from 'monaco-editor/editor/editor.api.js';
 import type { VimKeys } from './shared';
 
+// What `<C-p>` runs: named once, since the page compares its own window-level key against it.
+export const previewCommand = 'vim.preview';
+
 // The keys a preview answers to, each with the command it runs: a `vim.*` name is this module's own, every other value
 // is a monaco command id.
 const defaults: Record<string, string> = {
@@ -12,7 +15,7 @@ const defaults: Record<string, string> = {
   zz: 'vim.center', zt: 'vim.top', zb: 'vim.bottom',
   '/': 'actions.find', n: 'editor.action.nextMatchFindAction', N: 'editor.action.previousMatchFindAction',
   '<C-f>': 'vim.search',
-  '<C-p>': 'vim.nextMode',
+  '<C-p>': previewCommand,
   gd: 'vim.definition',
   '<C-o>': 'vim.jumpBack', '<C-i>': 'vim.jumpForward',
   v: 'vim.visual', V: 'vim.visualLine', y: 'vim.yank',
@@ -24,15 +27,12 @@ const defaults: Record<string, string> = {
 // and belong to the key pressed after them, so they are passed through.
 const passThrough = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead']);
 
-// A key as this mode reads one: the fields it looks at, and nothing else.
-export type Press = Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'altKey' | 'metaKey' | 'isComposing'>;
-
 // Whether the normal mode claims a key at all: a bare modifier belongs to the key after it, and the window's own
 // shortcuts and typing under an IME are not this mode's.
-const claimed = (event: Press) => !passThrough.has(event.key) && !event.metaKey && !event.altKey && !event.isComposing;
+const claimed = (event: KeyboardEvent) => !passThrough.has(event.key) && !event.metaKey && !event.altKey && !event.isComposing;
 
 // A key as a sequence token: a modified letter is its own token, so `<C-o>` is one and `gg` is two.
-const keyToken = (event: Press) => {
+const keyToken = (event: KeyboardEvent) => {
   if (event.ctrlKey && event.key.length === 1) return `<C-${event.key.toLowerCase()}>`;
   if (event.key === 'Escape') return '<Esc>';
   return event.key.length === 1 ? event.key : '';
@@ -51,8 +51,8 @@ const bindingsOf = (keys?: VimKeys) => {
   return bindings;
 };
 
-// Which command one key runs on its own under a page's config, for a page that answers that key outside the editor.
-export const vimCommand = (event: Press, keys?: VimKeys) => {
+// Which command one key runs on its own, for a page that answers that key at the window.
+export const vimCommand = (event: KeyboardEvent, keys?: VimKeys) => {
   if (claimed(event)) return bindingsOf(keys)[keyToken(event)];
 };
 
@@ -69,14 +69,14 @@ type VimOptions = {
   definition?: () => void;
   // Where `<C-f>` opens the page's picker over files, text and symbols.
   search?: () => void;
-  // What `<C-p>` does: the next way to read the file.
-  nextMode?: () => void;
+  // What `<C-p>` does: hands the file to the preview plugin, which draws what this page only reads as text.
+  preview?: () => void;
   // Where `y` puts what the selection holds.
   copy?: (text: string) => void;
 };
 
 // The normal mode of a preview: it moves the caret, pages and searches, and never writes, since the text is a reader's.
-export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys, jumpBack, jumpForward, definition, search, nextMode, copy }: VimOptions = {}) {
+export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys, jumpBack, jumpForward, definition, search, preview, copy }: VimOptions = {}) {
   const root: Step = { next: new Map() };
   for (const [sequence, command] of Object.entries(bindingsOf(keys))) {
     let node = root;
@@ -184,7 +184,7 @@ export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys, jum
     'vim.jumpForward': () => jumpForward?.(),
     'vim.definition': () => definition?.(),
     'vim.search': () => search?.(),
-    'vim.nextMode': () => nextMode?.(),
+    [previewCommand]: () => preview?.(),
     'vim.visual': () => enter('char'),
     'vim.visualLine': () => enter('line'),
     'vim.yank': yank,

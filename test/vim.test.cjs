@@ -2,8 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { writeFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { codeView, collectErrors, cursorLine, dismissSearch, editorLines, goToPath, htmlFrame, lists, lspDot, markdownPage, openFilesWorkspace, pathBox, previewMode, renderedInMarkdown, renderedPage, searchPanel, shownPanel, waitForLine, waitForPath } = require('./files-ui.cjs');
+const { createWorkspace, openView, until, withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { codeView, collectErrors, cursorLine, dismissSearch, editorLines, filesPanels, goToPath, lists, lspDot, openFilesWorkspace, pathBox, picture, previewPanels, searchPanel, waitForLine, waitForPath, workspaceTabs } = require('./files-ui.cjs');
 
 // What `y` takes is read where it goes: the clipboard.
 const taken = (page, text) => until(async () => (await page.evaluate(() => navigator.clipboard.readText())) === text);
@@ -49,45 +49,64 @@ test('the preview answers vim keys while its text has the keyboard', { timeout: 
   assert.deepEqual(errors, []);
 }));
 
-test('a page with more than one way to read it opens as text, and ctrl-p cycles them', { timeout: 120000 }, () => withWindow('wangcai-files-vim-modes', lists, async ({ home, page, errors }) => {
+// A window that has the preview plugin too: `<C-p>` sends the file to it and brings its tab forward.
+const withPreview = { workspaces: ['terminal-agent'], tabs: ['files', 'preview', 'terminal'] };
+
+test('ctrl-p hands the page to the preview plugin, which draws what this page only reads as text', { timeout: 120000 }, () => withWindow('wangcai-files-vim-preview', withPreview, async ({ home, page, errors }) => {
   const file = join(home, 'notes.md');
   writeFileSync(file, '# Notes title\n\nbody\n');
-  collectErrors(page, errors);
   await openFilesWorkspace(page);
   await goToPath(page, file);
   await codeView(page, '# Notes title').waitFor();
-  assert.equal(await markdownPage(page).count(), 0);
-  await page.keyboard.press('Control+p');
-  await renderedPage(page, 'Notes title').waitFor();
-  await page.keyboard.press('Control+p');
-  await codeView(page, '# Notes title').waitFor();
-  assert.equal(await markdownPage(page).count(), 0);
-  // The address box does not change the view from under the reader.
+  // A box keeps the keys that are typed into it, the address box included.
   await pathBox(page).focus();
   await page.keyboard.press('Control+p');
   await page.waitForTimeout(300);
-  assert.equal(await markdownPage(page).count(), 0);
-  // The type control the header offers takes the page into a rendered view and back out of it.
-  await renderedInMarkdown(shownPanel(page), 'Notes title');
-  await previewMode(shownPanel(page), '文本');
-  await codeView(page, '# Notes title').waitFor();
+  assert.equal(await previewPanels(page).count(), 0);
+  // With the keyboard back in the text, the same key hands the file over.
+  await codeView(page, '# Notes title').click();
+  await page.keyboard.press('Control+p');
+  const preview = previewPanels(page);
+  await preview.getByRole('heading', { name: 'Notes title' }).waitFor();
+  // The file is still the text this page was reading: the preview is another view of it, not another mode of this one.
+  assert.equal(await codeView(filesPanels(page), '# Notes title').count(), 1);
   assert.deepEqual(errors, []);
 }));
 
-test('a page rendered in a frame reports the key that leaves it', { timeout: 120000 }, () => withWindow('wangcai-files-vim-frame', lists, async ({ home, page, errors }) => {
-  const file = join(home, 'page.html');
-  writeFileSync(file, '<!doctype html><html><body><h1 id="heading">Frame title</h1></body></html>');
+test('a file this page cannot read is handed over by the same key, from the message it shows', { timeout: 120000 }, () => withWindow('wangcai-files-vim-picture', withPreview, async ({ home, page, errors }) => {
+  const photo = join(home, 'photo.png');
+  writeFileSync(photo, picture);
   await openFilesWorkspace(page);
-  await goToPath(page, file);
-  await codeView(page, 'Frame title').waitFor();
+  await goToPath(page, photo);
+  await page.getByRole('alert').filter({ hasText: '暂不支持二进制' }).waitFor();
+  // No editor was built for a picture, so the key is answered at the window instead of inside one.
   await page.keyboard.press('Control+p');
-  const frame = htmlFrame(page).contentFrame();
-  await frame.locator('#heading').waitFor();
-  // Pressed inside the frame, not at the window: the page still has to come back.
-  await frame.locator('#heading').click();
+  const preview = previewPanels(page);
+  const image = preview.locator('.preview-image img');
+  await image.waitFor();
+  assert.match(await image.getAttribute('src'), /^data:image\/png;base64,/);
+  assert.deepEqual(errors, []);
+}));
+
+test('only the page on show answers the key, though a window keeps the pages of every workspace', { timeout: 120000 }, () => withWindow('wangcai-files-vim-workspaces', withPreview, async ({ home, page, errors }) => {
+  const first = join(home, 'one.md');
+  const second = join(home, 'two.md');
+  writeFileSync(first, '# First page\n\nfirst-body\n');
+  writeFileSync(second, '# Second page\n\nsecond-body\n');
+  await openFilesWorkspace(page);
+  await goToPath(page, first);
+  await codeView(page, '# First page').waitFor();
+  await createWorkspace(page);
+  await openView(page, '文件');
+  await goToPath(page, second);
+  await codeView(page, '# Second page').waitFor();
+  // The page of the workspace left behind stays mounted, so the key has to know which one was asked for.
+  await workspaceTabs(page).first().click();
+  await codeView(page, '# First page').waitFor();
+  // The click that switched workspaces left the keyboard in the terminal, which keeps its own keys.
+  await codeView(page, '# First page').click();
   await page.keyboard.press('Control+p');
-  await codeView(page, 'Frame title').waitFor();
-  assert.equal(await htmlFrame(page).count(), 0);
+  await previewPanels(page).locator('.preview-name').filter({ hasText: 'one.md' }).waitFor();
   assert.deepEqual(errors, []);
 }));
 

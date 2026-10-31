@@ -1,7 +1,5 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import fuzzysort, { type KeysResult } from 'fuzzysort';
 import * as monaco from 'monaco-editor/editor/editor.api.js';
 import 'monaco-editor/basic-languages/monaco.contribution.js';
@@ -16,13 +14,14 @@ import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbol
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { LanguageServices, buffer, languageFor, ownProviders, type FileSymbol } from './lsp';
-import { vimCommand, vimKeys, type Press } from './vim';
-import { imageMime, machineKey, type FileClick, type Font, type GitHunk, type GitLines, type GitStatus, type History, type HistoryEntry, type Position, type SearchHit, type Settings, type VimKeys } from './shared';
+import { previewCommand, vimCommand, vimKeys } from './vim';
+import { machineKey, type FileClick, type Font, type GitHunk, type GitLines, type GitStatus, type History, type HistoryEntry, type Position, type SearchHit, type Settings, type VimKeys } from './shared';
 import './style.css';
 
-export const title = '文件';
+// What the tab is called, and the id the window remembers it by when it opens it again.
+const identity = { id: 'directory', title: '文件' };
+export const title = identity.title;
 let activeWorkspaceId: string | undefined;
-let preview: { url: string; message: string };
 let font: Font;
 let editorLineHeight = 0;
 let vimSettings: VimKeys | undefined;
@@ -83,43 +82,6 @@ function Navigation({ context, file, navigate, refresh, back, forward, openPicke
     </header>
     {error && <div className="file-message" role="alert">{error}</div>}
   </>;
-}
-
-type Mode = 'text' | 'markdown' | 'html';
-const modeLabels: Record<Mode, string> = { text: '文本', markdown: 'Markdown 预览', html: 'HTML 预览' };
-
-function ModeMenu({ modes, mode, select }: { modes: Mode[]; mode: Mode; select: (mode: Mode) => void }) {
-  const [open, setOpen] = useState(false);
-  if (!modes.length) return null;
-  // One way to read the file is still worth naming.
-  if (modes.length === 1) return <span className="preview-mode">{modeLabels[mode]}</span>;
-  return <div className="preview-modes">
-    <button className="preview-mode" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>{modeLabels[mode]}
-      <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" /></svg>
-    </button>
-    {open && <>
-      <div className="menu-backdrop" onClick={() => setOpen(false)} />
-      <div className="preview-menu" role="menu" aria-label="预览方式">
-        {modes.map((item) => <button key={item} role="menuitem" autoFocus={item === mode} onClick={() => { setOpen(false); select(item); }}>{modeLabels[item]}</button>)}
-      </div>
-    </>}
-  </div>;
-}
-
-// Frontmatter would otherwise render as a thematic break plus a setext heading.
-const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
-
-function splitFrontmatter(text: string): { fields: [string, string][]; body: string } {
-  const match = frontmatter.exec(text);
-  if (!match) return { fields: [], body: text };
-  const fields: [string, string][] = [];
-  for (const line of match[1].split('\n')) {
-    const separator = line.indexOf(':');
-    if (separator < 1 || /^\s/.test(line)) continue;
-    fields.push([line.slice(0, separator).trim(), line.slice(separator + 1).trim()]);
-  }
-  if (!fields.length) return { fields, body: text };
-  return { fields, body: text.slice(match[0].length) };
 }
 
 const stateLabels = { connecting: '正在启动', open: '运行中', closed: '已退出', missing: '未启动' };
@@ -231,38 +193,8 @@ function DiffPeek({ path, change, area, rowTop, close }: { path: string; change:
   </div>;
 }
 
-// A key the page answers: a press, with whether the page already took it and which element received it.
-type KeyPress = Press & { defaultPrevented: boolean; target: EventTarget | null };
-
-// Carried along with the page a frame shows: the script reports each key pressed to this window. The fields are those of
-// a `KeyPress` but the target, a node of the frame's own document, so a field added to `KeyPress` belongs here too.
-const frameReporter = `<script>addEventListener('keydown', (event) => parent.postMessage({ vim: { key: event.key, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey, isComposing: event.isComposing, defaultPrevented: event.defaultPrevented } }, '*'));</script>`;
-
-function Preview({ file, text, mode, hunks, navigate, onModel, remember, previewing, jumps, openSearch, nextMode, answerKey }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean; jumps: Jumps; openSearch: () => void; nextMode: () => void; answerKey: (event: KeyPress) => boolean }) {
+function EditorPage({ file, text, hunks, navigate, onModel, remember, peeking, jumps, openSearch, previewFile }: { file: HistoryEntry; text: string; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; peeking: boolean; jumps: Jumps; openSearch: () => void; previewFile: (entry: FileClick) => void }) {
   const element = useRef<HTMLDivElement>(null);
-  const frame = useRef<HTMLIFrameElement>(null);
-  // The preview document asks for its content as soon as it loads, so the listener has to be in place first.
-  useLayoutEffect(() => {
-    if (mode !== 'html') return;
-    const deliver = (event: MessageEvent) => {
-      const target = frame.current?.contentWindow;
-      if (target && event.data === preview.message && event.source === target) target.postMessage(text + frameReporter, '*');
-    };
-    addEventListener('message', deliver);
-    return () => removeEventListener('message', deliver);
-  }, [mode, text]);
-  // Only this frame's report counts here: any window can post a message of that shape.
-  useEffect(() => {
-    if (mode !== 'html') return;
-    const report = (event: MessageEvent) => {
-      const target = frame.current?.contentWindow;
-      const press = event.data?.vim;
-      if (!target || event.source !== target || !press) return;
-      answerKey({ ...press, target: null });
-    };
-    addEventListener('message', report);
-    return () => removeEventListener('message', report);
-  }, [mode]);
   const control = useRef<monaco.editor.IStandaloneCodeEditor | undefined>(undefined);
   // The marks of the decorations on screen, which is what a gutter click resolves against.
   const marks = useRef<GitMark[]>([]);
@@ -301,13 +233,12 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
   useEffect(() => {
     if (!peek) return;
     const peeked = JSON.stringify(peek.change.hunk);
-    if (mode === 'text' && hunks.some((hunk) => JSON.stringify(hunk) === peeked)) return;
+    if (hunks.some((hunk) => JSON.stringify(hunk) === peeked)) return;
     setPeek(undefined);
-  }, [hunks, mode]);
-  // The editor is built again when the text or the mode changes, and never for a jump: a jump moves the same editor, so
-  // the language server keeps the model it already synchronizes.
+  }, [hunks]);
+  // The editor is built again when the text changes, and never for a jump: a jump moves the same editor, so the
+  // language server keeps the model it already synchronizes.
   useEffect(() => {
-    if (mode !== 'text') return;
     const language = languageFor(file.path);
     // A file shown from another machine is the same model.
     const model = buffer(monaco.Uri.file(file.path), language, text);
@@ -372,7 +303,7 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
     // The page answers vim-style keys while its text has the keyboard; the picker's box and monaco's own widgets keep theirs.
     const vim = vimKeys(editor, {
       keys: vimSettings, jumpBack: () => walk(-1), jumpForward: () => walk(1), definition, search: openSearch,
-      nextMode, copy: (text) => void navigator.clipboard.writeText(text).catch(() => undefined),
+      preview: () => previewFile(shown.current), copy: (text) => void navigator.clipboard.writeText(text).catch(() => undefined),
     });
     const opened = editor.onMouseDown((event) => {
       // A click on a gutter mark opens the block it stands for.
@@ -404,14 +335,14 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
       control.current = undefined;
       scrolled.dispose(); moved.dispose(); opened.dispose(); vim.dispose(); editor.dispose(); onModel(undefined);
     };
-  }, [text, mode, remember]);
-  // The keyboard belongs in the preview, unless the page is only showing what a picker's selection stands for, where
+  }, [text, remember]);
+  // The keyboard belongs in the editor, unless the page is only showing what a picker's selection stands for, where
   // taking it would end the name being typed.
-  const focusEditor = () => { if (!previewing) control.current?.focus(); };
-  // The text and the mode are watched because they rebuild the editor, which is a new one to hand the keyboard to.
+  const focusEditor = () => { if (!peeking) control.current?.focus(); };
+  // The text is watched because it rebuilds the editor, which is a new one to hand the keyboard to.
   useEffect(() => {
     focusEditor();
-  }, [previewing, text, mode]);
+  }, [peeking, text]);
   // A key that shows this view leaves the keyboard on the plugin's page rather than in the editor, so the page hands it
   // over when it hears that it was shown — a listener here, since the page's focus alone does not say who shows it.
   useEffect(() => {
@@ -419,7 +350,7 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
     if (!page) return;
     page.addEventListener('wangcai:shown', focusEditor);
     return () => page.removeEventListener('wangcai:shown', focusEditor);
-  }, [previewing]);
+  }, [peeking]);
   // Where the view sits: the offset the file was left at, or else the line the entry was opened at, which a jump inside
   // the file moves to as well. An editor that was built again starts at its own top, so the offset is taken for it once
   // more; a panel that has given it no height yet places it on the first layout instead.
@@ -442,7 +373,7 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
     if (place()) return;
     const laidOut = editor.onDidLayoutChange(() => { if (place()) laidOut.dispose(); });
     return () => laidOut.dispose();
-  }, [file.line, file.column, text, mode]);
+  }, [file.line, file.column, text]);
   // Git can report new marks without the text changing, so they are applied whenever the read returns them.
   useEffect(() => {
     const editor = control.current;
@@ -455,9 +386,7 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
       options: { linesDecorationsClassName: `git-line-${kind}` },
     })));
     return () => decoration.clear();
-  }, [hunks, text, mode]);
-  if (mode === 'markdown') return <MarkdownPage text={text} top={file.top} remember={(at) => remember(file, at)} />;
-  if (mode === 'html') return <iframe className="html-frame" ref={frame} title="HTML 预览" sandbox="allow-scripts" src={preview.url} />;
+  }, [hunks, text]);
   return <>
     <div className="code-preview" ref={element} />
     {menu && <>
@@ -477,117 +406,15 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
   </>;
 }
 
-// A block is highlighted with the same languages and theme as the code editor, so a fence and a code file read alike.
-function CodeBlock({ language, text }: { language: string; text: string }) {
-  const code = useRef<HTMLElement>(null);
-  const [copied, setCopied] = useState(false);
-  // Monaco colorizes the element itself and stays in charge of its markup, so a changed text needs a new element
-  // (the `key` below) and this effect to run again; that is what the text dependency is for.
-  useEffect(() => {
-    const resolved = monaco.languages.getLanguages().find(({ id, aliases }) => id === language || aliases?.includes(language))?.id;
-    if (resolved) void monaco.editor.colorizeElement(code.current!, { theme: 'wangcai', mimeType: resolved });
-  }, [language, text]);
-  return <div className="markdown-code">
-    <div className="markdown-code-head">
-      {language && <span>{language}</span>}
-      <button className="markdown-code-copy" type="button" title="复制代码" onClick={() => {
-        void navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        });
-      }}>{copied ? '已复制' : '复制'}</button>
-    </div>
-    <pre className="markdown-code-body"><code key={text} ref={code}>{text}</code></pre>
-  </div>;
-}
-
-// The markdown page is sized by its own divider: the width is a fraction of the pane, so a window resize keeps the
-// proportion, and one fraction is shared by every markdown file the window shows.
-function MarkdownPage({ text, top, remember }: { text: string; top?: number; remember: (at: Partial<Position>) => void }) {
-  const pane = useRef<HTMLDivElement>(null);
-  const page = useRef<HTMLDivElement>(null);
-  const divider = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ left: number; width: number } | undefined>(undefined);
-  const painted = useRef(0);
-  // A page can mount while its panel is hidden, where the pane has no size to measure: until a layout gives it one,
-  // the offset it was left at waits, and the ratio it was left at is drawn as it is.
-  const pending = useRef(top ?? 0);
-  const restoreTop = () => {
-    if (!pending.current || !pane.current!.clientHeight) return;
-    pane.current!.scrollTop = pending.current;
-    pending.current = 0;
-  };
-  const { fields, body } = splitFrontmatter(text);
-  const paint = (ratio: number) => {
-    const width = pane.current!.clientWidth;
-    // A page that reached the pane's right edge would carry its divider out of reach, so the divider keeps its width.
-    const room = width - divider.current!.offsetWidth;
-    painted.current = room > 0 ? Math.min(room / width, Math.max(240 / width, ratio)) : ratio;
-    page.current!.style.width = `${painted.current * 100}%`;
-  };
-
-  // The page takes the fraction its divider was dragged to, or a readable measure when it was never dragged.
-  useLayoutEffect(() => {
-    const restore = () => {
-      const ratio = Number(localStorage.getItem('markdown-width'));
-      paint(ratio > 0 ? ratio : 0.6);
-    };
-    const observer = new ResizeObserver(() => { restore(); restoreTop(); });
-    observer.observe(pane.current!);
-    restore();
-    restoreTop();
-    return () => observer.disconnect();
-  }, []);
-
-  return <div className="markdown-pane" ref={pane} onScroll={(event) => remember({ top: event.currentTarget.scrollTop })}>
-    <article className="markdown-preview" ref={page}>
-      {fields.length > 0 && <dl className="markdown-meta">
-        {fields.map(([key, value], index) => <Fragment key={index}><dt>{key}</dt><dd>{value}</dd></Fragment>)}
-      </dl>}
-      <Markdown remarkPlugins={[remarkGfm]} skipHtml components={{
-        a: ({ children }) => <span>{children}</span>,
-        img: ({ alt }) => <span>{alt}</span>,
-        // The language is not in `pre`'s props: it is on the `code` element the fence opened, which is the `pre`'s only child.
-        pre: ({ node }) => {
-          const child = node?.children[0];
-          const code = child?.type === 'element' ? child : undefined;
-          const language = String(code?.properties.className ?? '').replace('language-', '').toLowerCase();
-          const text = code?.children[0].type === 'text' ? code.children[0].value.replace(/\n$/, '') : '';
-          return <CodeBlock language={language} text={text} />;
-        },
-      }}>{body}</Markdown>
-    </article>
-    <div className="markdown-divider" ref={divider} role="separator" aria-label="调整预览宽度" aria-orientation="vertical"
-      onPointerDown={(event) => {
-        if (event.button !== 0) return;
-        event.preventDefault();
-        event.currentTarget.setPointerCapture(event.pointerId);
-        drag.current = { left: pane.current!.getBoundingClientRect().left, width: pane.current!.clientWidth };
-      }}
-      onPointerMove={(event) => {
-        const from = drag.current;
-        if (from && event.currentTarget.hasPointerCapture(event.pointerId)) paint((event.clientX - from.left) / from.width);
-      }}
-      onPointerUp={() => {
-        if (!drag.current) return;
-        drag.current = undefined;
-        localStorage.setItem('markdown-width', String(painted.current));
-      }} />
-  </div>;
-}
-
 // Whether the keyboard is being typed into a box, which keeps its keys to itself.
 const writing = (target: EventTarget | null) => target instanceof HTMLElement && ['INPUT', 'TEXTAREA'].includes(target.tagName);
 
-function FileView(props: NavigationProps & { holder: string; remember: Remember; previewing: boolean; jumps: Jumps }) {
-  const { context, file, holder, navigate, remember, previewing, jumps, openSearch } = props;
+function FileView(props: NavigationProps & { holder: string; remember: Remember; peeking: boolean; jumps: Jumps }) {
+  const { context, file, holder, navigate, remember, peeking, jumps, openSearch } = props;
   const [text, setText] = useState<string>();
   const [error, setError] = useState('');
   const [hunks, setHunks] = useState<GitHunk[]>([]);
-  const markdown = /\.(md|markdown)$/i.test(file.path);
-  const html = /\.html?$/i.test(file.path);
-  const image = imageMime(file.path);
-  const modes: Mode[] = image ? [] : ['text', ...(markdown ? ['markdown' as const] : []), ...(html ? ['html' as const] : [])];
+  const [model, setModel] = useState<monaco.editor.ITextModel>();
   // A file is read again when the path it names changes, not when the cursor moves inside it.
   useEffect(() => {
     let alive = true;
@@ -597,8 +424,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
     const read = () => {
       void context.ui.request<string>('read', file).then((text) => { if (alive) { setText(text); setError(''); } })
         .catch((error: Error) => { if (alive) setError(error.message); });
-      // The marks describe this text, so they are read with it; an image is a data URL with no lines to mark.
-      if (image) return;
+      // The marks describe this text, so they are read with it.
       void context.ui.request<GitLines | null>('git-lines', { machine: file.machine, path: file.path })
         .then((lines) => {
           if (!alive) return;
@@ -615,32 +441,32 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
     read();
     return () => { alive = false; stop(); };
   }, [context, holder, file.path]);
-  // A file with a text view opens as that text.
-  const [mode, setMode] = useState<Mode>('text');
-  const nextMode = () => setMode((current) => modes[(modes.indexOf(current) + 1) % modes.length]);
-  // A rendered view has no editor to hold the keys of the normal mode, so the one key that leaves it is taken here.
-  const answerKey = (event: KeyPress) => {
-    if (event.defaultPrevented || writing(event.target) || vimCommand(event, vimSettings) !== 'vim.nextMode') return false;
-    nextMode();
-    return true;
+  // `<C-p>` is the preview plugin's: the entry goes to it, and its tab comes forward to show it.
+  const previewFile = (entry: FileClick) => {
+    void context.global.publish('preview:open', entry);
+    void context.global.publish('core:show-view', { plugin: 'preview' });
   };
-  // The editor's own keys answer first, which is what `defaultPrevented` reports.
+  const section = useRef<HTMLElement>(null);
+  // The keys of the normal mode live in the editor, so the one that leaves for the preview plugin is also taken at the
+  // window: that is where it works when the focus is not in the text at all. An editor's own copy runs first, which is
+  // `defaultPrevented`, and a page behind another tab keeps quiet.
   useEffect(() => {
-    if (modes.length < 2) return;
-    const onKeyDown = (event: KeyboardEvent) => { if (answerKey(event)) event.preventDefault(); };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || writing(event.target) || !section.current?.checkVisibility()) return;
+      if (vimCommand(event, vimSettings) !== previewCommand) return;
+      event.preventDefault();
+      previewFile(file);
+    };
     addEventListener('keydown', onKeyDown);
     return () => removeEventListener('keydown', onKeyDown);
-  }, [modes.length]);
-  const [model, setModel] = useState<monaco.editor.ITextModel>();
-  return <section className="file-preview" aria-label="文件预览">
+  }, [file]);
+  return <section className="file-preview" aria-label="文件预览" ref={section}>
     <Navigation {...props}>
-      <ModeMenu modes={modes} mode={mode} select={setMode} />
       <LspStatus model={model} />
     </Navigation>
     {error ? <div className="file-message" role="alert">{error}</div>
       : text === undefined ? <div className="file-message">正在读取…</div>
-      : image ? <div className="image-preview"><img src={text} alt={file.path} /></div>
-      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} previewing={previewing} jumps={jumps} openSearch={openSearch} nextMode={nextMode} answerKey={answerKey} />}
+      : <EditorPage file={file} text={text} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} peeking={peeking} jumps={jumps} openSearch={openSearch} previewFile={previewFile} />}
   </section>;
 }
 
@@ -978,13 +804,13 @@ function BrowserView({ context, workspaceId, holder, file, visited, picking, sea
   return <div className={searching ? 'browser-view searching' : 'browser-view'}>
     {file.type === 'directory' || picking
       ? <Picker key={pickerKey} context={context} file={file} workspace={workspace} holder={holder} {...navigation} />
-      : <FileView key={key} context={context} file={file} holder={holder} remember={remember} jumps={jumps} previewing={searching} {...navigation} />}
+      : <FileView key={key} context={context} file={file} holder={holder} remember={remember} jumps={jumps} peeking={searching} {...navigation} />}
     {visited && searching && <Search context={context} visited={visited} workspace={workspace} peek={peek} navigate={navigation.navigate} close={closeSearch} />}
   </div>;
 }
 
 export function open(context: UiContext, record?: TabRecord) {
-  if (!record || record.id === 'directory') openTab(context, record?.workspaceId ?? activeWorkspaceId);
+  if (!record || record.id === identity.id) openTab(context, record?.workspaceId ?? activeWorkspaceId);
 }
 
 const openFiles = () => [...histories.values()].map((history) => history.entries[history.index]).filter((file): file is FileClick => file?.type === 'file');
@@ -997,7 +823,7 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
   const jumps: Jumps = { entries: [], index: -1 };
   // What the tab shows on top of the page the history points at: the two pickers, and the file a picker's selection
   // stands for, which is shown without being visited.
-  const view: { picking: boolean; searching: boolean; preview?: FileClick } = { picking: false, searching: false };
+  const view: { picking: boolean; searching: boolean; peeked?: FileClick } = { picking: false, searching: false };
   const push = (file: FileClick) => {
     const current = history.entries[history.index];
     const same = current && machineKey(current.machine) === machineKey(file.machine) && current.type === file.type && current.path === file.path;
@@ -1013,7 +839,7 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
     void context.ui.request('save-history', Object.fromEntries(histories));
   };
   if (file) push(file);
-  context.host.tabs({ id: 'directory', title: '文件', workspaceId, onClose() {
+  context.host.tabs({ ...identity, workspaceId, onClose() {
     for (const [key, value] of histories) if (value === history) histories.delete(key);
     void context.ui.request('save-history', Object.fromEntries(histories));
     void services?.closeUnused(openFiles());
@@ -1023,7 +849,7 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
     // Every move of what the tab shows goes through here: a caller says what it opens, and what no longer holds is
     // cleared for it, so no caller has to remember the parts it is not touching.
     const show = (next: Partial<typeof view> = {}) => {
-      Object.assign(view, { picking: false, searching: false, preview: undefined }, next);
+      Object.assign(view, { picking: false, searching: false, peeked: undefined }, next);
       render();
     };
     // A view is handed the same callbacks on every render: its effect depends on navigate, and a new identity each
@@ -1033,7 +859,7 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
     const openSearch = () => show({ searching: true });
     const closeSearch = () => show();
     // The picker stays open where the name is being typed.
-    const peek = (file: FileClick) => show({ searching: true, preview: file });
+    const peek = (file: FileClick) => show({ searching: true, peeked: file });
     const refresh = () => { history.entries[history.index] = { ...history.entries[history.index] }; render(); };
     // Walking the tab's history: the entry it lands on is saved with the rest, and the pickers it leaves are cleared.
     const step = (by: number) => {
@@ -1048,7 +874,7 @@ function openTab(context: UiContext, workspaceId?: string, file?: FileClick) {
       // A file left at its top is where a fresh open puts it, so there is no offset worth keeping.
       if (entry.top === 0) delete entry.top;
     };
-    const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} holder={key} file={view.preview ?? history.entries[history.index]} visited={history.entries[history.index]} picking={view.picking} searching={view.searching}
+    const render = () => root.render(<BrowserView context={context} workspaceId={workspaceId} holder={key} file={view.peeked ?? history.entries[history.index]} visited={history.entries[history.index]} picking={view.picking} searching={view.searching}
       navigate={navigate}
       remember={remember}
       jumps={jumps}
@@ -1103,7 +929,6 @@ export async function mount(_container: HTMLElement, context: UiContext) {
   font = profile.font;
   vimSettings = profile.vim?.keys;
   editorLineHeight = font.lineHeight ? Math.round(font.size * font.lineHeight) : 0;
-  preview = context.host.preview;
   monaco.editor.defineTheme('wangcai', editorTheme(profile.theme));
   for (const [key, history] of Object.entries(await context.ui.request<Record<string, History>>('history'))) histories.set(key, history);
   const response = await fetch(new URL('./ui.worker.js', import.meta.url));

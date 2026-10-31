@@ -2,7 +2,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import type { MachineConnection, Process } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
-import { imageMime, machineKey, type FileClick, type GitHunk, type GitLetter, type GitLines, type GitStatus, type History, type LspData, type SearchHit, type Settings } from './shared';
+import { machineKey, type FileClick, type GitHunk, type GitLetter, type GitLines, type GitStatus, type History, type LspData, type SearchHit, type Settings } from './shared';
 
 export const keys = { '<leader>ff': { global: true, desc: '打开文件视图', event: 'core:show-view', data: { plugin: 'files' } } };
 
@@ -178,8 +178,6 @@ export function activate(context: MainContext) {
         return { path: directory, entries };
       }
       const bytes = await connection.fs.readFile(path!);
-      const image = imageMime(path!);
-      if (image) return `data:${image};base64,${Buffer.from(bytes).toString('base64')}`;
       let text: string;
       try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
       catch { throw new Error('暂不支持二进制或非 UTF-8 文件'); }
