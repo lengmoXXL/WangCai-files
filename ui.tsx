@@ -228,7 +228,7 @@ function DiffPeek({ path, change, area, rowTop, close }: { path: string; change:
   </div>;
 }
 
-function Preview({ file, text, mode, hunks, navigate, onModel, remember, previewing, jumps }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean; jumps: Jumps }) {
+function Preview({ file, text, mode, hunks, navigate, onModel, remember, previewing, jumps, openSearch }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean; jumps: Jumps; openSearch: () => void }) {
   const element = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   // The preview document asks for its content as soon as it loads, so the listener has to be in place first.
@@ -349,7 +349,7 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
     };
     // The page answers vim-style keys while its text has the keyboard; the picker's box and monaco's own widgets keep theirs.
     const vim = vimKeys(editor, {
-      keys: vimSettings, jumpBack: () => walk(-1), jumpForward: () => walk(1), definition,
+      keys: vimSettings, jumpBack: () => walk(-1), jumpForward: () => walk(1), definition, search: openSearch,
       copy: (text) => void navigator.clipboard.writeText(text).catch(() => undefined),
     });
     const opened = editor.onMouseDown((event) => {
@@ -545,7 +545,7 @@ function MarkdownPage({ text, top, remember }: { text: string; top?: number; rem
 }
 
 function FileView(props: NavigationProps & { holder: string; remember: Remember; previewing: boolean; jumps: Jumps }) {
-  const { context, file, holder, navigate, remember, previewing, jumps } = props;
+  const { context, file, holder, navigate, remember, previewing, jumps, openSearch } = props;
   const [text, setText] = useState<string>();
   const [error, setError] = useState('');
   const [hunks, setHunks] = useState<GitHunk[]>([]);
@@ -590,7 +590,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
     {error ? <div className="file-message" role="alert">{error}</div>
       : text === undefined ? <div className="file-message">正在读取…</div>
       : image ? <div className="image-preview"><img src={text} alt={file.path} /></div>
-      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} previewing={previewing} jumps={jumps} />}
+      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} previewing={previewing} jumps={jumps} openSearch={openSearch} />}
   </section>;
 }
 

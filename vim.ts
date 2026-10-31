@@ -11,6 +11,7 @@ const defaults: Record<string, string> = {
   '<C-d>': 'cursorPageDown', '<C-u>': 'cursorPageUp',
   zz: 'vim.center', zt: 'vim.top', zb: 'vim.bottom',
   '/': 'actions.find', n: 'editor.action.nextMatchFindAction', N: 'editor.action.previousMatchFindAction',
+  '<C-f>': 'vim.search',
   gd: 'vim.definition',
   '<C-o>': 'vim.jumpBack', '<C-i>': 'vim.jumpForward',
   v: 'vim.visual', V: 'vim.visualLine', y: 'vim.yank',
@@ -32,12 +33,14 @@ type VimOptions = {
   jumpForward?: () => void;
   // What `gd` asks: the page knows its server, and which file the answer is in.
   definition?: () => void;
+  // Where `<C-f>` opens the page's picker over files, text and symbols.
+  search?: () => void;
   // Where `y` puts what the selection holds.
   copy?: (text: string) => void;
 };
 
 // The normal mode of a preview: it moves the caret, pages and searches, and never writes, since the text is a reader's.
-export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}, jumpBack, jumpForward, definition, copy }: VimOptions = {}) {
+export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}, jumpBack, jumpForward, definition, search, copy }: VimOptions = {}) {
   const bindings: Record<string, string> = { ...defaults };
   for (const [sequence, command] of Object.entries(keys)) {
     if (command === false) delete bindings[sequence];
@@ -126,6 +129,8 @@ export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}
   let awaiting: ((char: string) => void) | undefined;
   // What `;` repeats, and `,` the other way round.
   let lastSeek: { char: string; ahead: boolean; till: boolean } | undefined;
+  // A seek waiting for its character ends at any key that is not one.
+  const endSeek = () => { awaiting = undefined; };
   const seeker = (ahead: boolean, till: boolean) => (times: number) => {
     awaiting = (char) => {
       lastSeek = { char, ahead, till };
@@ -147,6 +152,7 @@ export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}
     'vim.jumpBack': () => jumpBack?.(),
     'vim.jumpForward': () => jumpForward?.(),
     'vim.definition': () => definition?.(),
+    'vim.search': () => search?.(),
     'vim.visual': () => enter('char'),
     'vim.visualLine': () => enter('line'),
     'vim.yank': yank,
@@ -178,19 +184,19 @@ export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}
   let count = 0;
   const onKeyDown = (event: KeyboardEvent) => {
     // The window's own shortcuts, and typing that belongs to whatever widget holds it, are not this mode's.
-    if (event.metaKey || event.altKey || event.isComposing || !editor.hasTextFocus()) return;
+    if (event.metaKey || event.altKey || event.isComposing || !editor.hasTextFocus()) { endSeek(); return; }
     const token = tokenOf(event);
-    if (!token) return;
-    // A key that is the argument of a seek is read as that, whatever else it would have meant.
     if (awaiting) {
       const take = awaiting;
-      awaiting = undefined;
-      // A key that is not a character ends the seek and keeps the meaning it has on its own.
-      if (token.length !== 1) return;
-      event.preventDefault();
-      take(token);
-      return;
+      endSeek();
+      // The key a seek was waiting for is read as that character, whatever else it would have meant.
+      if (token.length === 1) {
+        event.preventDefault();
+        take(token);
+        return;
+      }
     }
+    if (!token) return;
     // Leaving a selection is this mode's own business; with none, the key is the window's, as before.
     if (token === '<Esc>' && visual) {
       event.preventDefault();
@@ -225,8 +231,8 @@ export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}
     node = root;
     run(next.command, times);
   };
-  // A sequence waiting for its next key also ends when the keyboard leaves the page.
-  const onBlur = () => { node = root; count = 0; };
+  // A sequence and a seek waiting for their next key both end when the keyboard leaves the page.
+  const onBlur = () => { endSeek(); node = root; count = 0; };
 
   const host = editor.getDomNode();
   host?.addEventListener('keydown', onKeyDown, true);

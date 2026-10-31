@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { codeView, collectErrors, cursorLine, goToPath, lists, lspDot, openFilesWorkspace, waitForLine, waitForPath } = require('./files-ui.cjs');
+const { codeView, collectErrors, cursorLine, dismissSearch, editorLines, goToPath, lists, lspDot, openFilesWorkspace, searchPanel, waitForLine, waitForPath } = require('./files-ui.cjs');
 
 // What `y` takes is read where it goes: the clipboard.
 const taken = (page, text) => until(async () => (await page.evaluate(() => navigator.clipboard.readText())) === text);
@@ -16,6 +16,15 @@ test('the preview answers vim keys while its text has the keyboard', { timeout: 
   await goToPath(page, file);
   await codeView(page, 'line1').waitFor();
   await waitForLine(page, 'line1');
+  await page.keyboard.press('G');
+  await waitForLine(page, 'line60');
+  await page.keyboard.press('g');
+  await page.keyboard.press('g');
+  await waitForLine(page, 'line1');
+  // A seek waiting for its character ends when the keyboard leaves the page.
+  await page.keyboard.press('f');
+  await page.evaluate(() => document.activeElement?.blur());
+  await editorLines(page).click();
   await page.keyboard.press('G');
   await waitForLine(page, 'line60');
   await page.keyboard.press('g');
@@ -34,6 +43,9 @@ test('the preview answers vim keys while its text has the keyboard', { timeout: 
   assert.equal(await find.locator('.find-part textarea').inputValue(), 'line42');
   await page.keyboard.press('Escape');
   await until(async () => !(await page.locator('.find-widget').getAttribute('class')).includes('visible'));
+  await page.keyboard.press('Control+f');
+  await searchPanel(page).waitFor();
+  await dismissSearch(page);
   assert.deepEqual(errors, []);
 }));
 
@@ -61,7 +73,7 @@ test('v selects by characters, V by lines, and y takes the selection', { timeout
 
 test('f finds a character on the line, and t stops one short of it', { timeout: 120000 }, () => withWindow('wangcai-files-vim-seek', lists, async ({ home, page, errors }) => {
   const file = join(home, 'seek.ts');
-  writeFileSync(file, 'abcXdefXghi\n');
+  writeFileSync(file, 'abcXdefXghi\nsecond line\nthird line');
   collectErrors(page, errors);
   await openFilesWorkspace(page);
   await goToPath(page, file);
@@ -98,10 +110,24 @@ test('f finds a character on the line, and t stops one short of it', { timeout: 
   await page.keyboard.press('$');
   await page.keyboard.press('y');
   await taken(page, 'XdefXghi');
+  // A key that is not a character ends the seek it interrupts.
+  await page.keyboard.press('f');
+  await page.keyboard.press('Control+f');
+  await searchPanel(page).waitFor();
+  await dismissSearch(page);
+  await editorLines(page).click();
+  await page.keyboard.press('g');
+  await page.keyboard.press('g');
+  await waitForLine(page, 'abcXdefXghi');
+  await page.keyboard.press('f');
+  await page.keyboard.press('ArrowDown');
+  await waitForLine(page, 'second line');
+  await page.keyboard.press('G');
+  await waitForLine(page, 'third line');
   assert.deepEqual(errors, []);
 }));
 
-const rebound = { ...lists, tabs: [{ id: 'files', config: { vim: { keys: { G: 'cursorTop', gg: false } } } }, 'terminal'] };
+const rebound = { ...lists, tabs: [{ id: 'files', config: { vim: { keys: { G: 'cursorTop', gg: false, '<C-f>': false } } } }, 'terminal'] };
 
 test('a page can rebind a key of that mode and drop another', { timeout: 120000 }, () => withWindow('wangcai-files-vim-keys', rebound, async ({ home, page, errors }) => {
   const file = join(home, 'lines.ts');
@@ -114,13 +140,17 @@ test('a page can rebind a key of that mode and drop another', { timeout: 120000 
   await page.keyboard.press('0');
   await page.keyboard.press('j');
   await waitForLine(page, 'line21');
-  // `gg` was dropped, so the top of the file is not where two of them go; `G` was pointed at the movement up.
+  // This page dropped `gg` and pointed `G` at the movement up.
   await page.keyboard.press('g');
   await page.keyboard.press('g');
   await page.waitForTimeout(500);
   assert.equal(await cursorLine(page), 'line21');
   await page.keyboard.press('G');
   await waitForLine(page, 'line1');
+  // This page dropped `ctrl-f`.
+  await page.keyboard.press('Control+f');
+  await page.waitForTimeout(500);
+  assert.equal(await searchPanel(page).count(), 0);
   assert.deepEqual(errors, []);
 }));
 
