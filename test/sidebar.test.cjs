@@ -4,7 +4,7 @@ const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { activeTerminal, createWorkspace, openView, until, withHome } = require('@lengmoxxl/wangcai-testkit');
-const { backButton, boxOf, closeTab, closeWorkspace, collectErrors, columnOf, desktopMain, drawnCloseButtons, entry, filesPanels, filesTab, newSidebarTab, openWorkspaces, renderedPage, runIn, selectedViewTab, shownPanel, sidebarLeft, sidebarRight, sidebarTabs, sidebarToggle, viewMenu, viewTab, workspaceBar, workspaceTabs } = require('./files-ui.cjs');
+const { backButton, boxOf, closeTab, closeWorkspace, collectErrors, columnOf, desktopMain, drawnCloseButtons, entry, filesPanels, filesTab, newSidebarTab, openWorkspaces, renderedInMarkdown, runIn, selectedViewTab, shownPanel, sidebarLeft, sidebarRight, sidebarTabs, sidebarToggle, viewMenu, viewTab, workspaceBar, workspaceTabs } = require('./files-ui.cjs');
 
 test('view menu switches plugins and handles empty and closed terminals', { timeout: 180000 }, () => {
   // A plugin of the case's own, which draws a view the sidebar can be switched to.
@@ -206,11 +206,11 @@ test('view menu switches plugins and handles empty and closed terminals', { time
     assert.equal(await filesTab(page).count(), 0);
     await openView(page, '文件');
     await hiddenFile.click();
-    await renderedPage(page, 'Hidden preview').waitFor();
+    await renderedInMarkdown(shownPanel(page), 'Hidden preview');
     await back.click();
     await subdirectoryEntry.click();
     await entry(columnOf(page, join(home, '子目录 with spaces')), '空 格.md').click();
-    await renderedPage(page, 'Nested preview').waitFor();
+    await renderedInMarkdown(shownPanel(page), 'Nested preview');
     await back.click();
     // Stepping up again lands on the directory the tab opened on.
     await back.click();

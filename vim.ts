@@ -12,6 +12,7 @@ const defaults: Record<string, string> = {
   zz: 'vim.center', zt: 'vim.top', zb: 'vim.bottom',
   '/': 'actions.find', n: 'editor.action.nextMatchFindAction', N: 'editor.action.previousMatchFindAction',
   '<C-f>': 'vim.search',
+  '<C-p>': 'vim.nextMode',
   gd: 'vim.definition',
   '<C-o>': 'vim.jumpBack', '<C-i>': 'vim.jumpForward',
   v: 'vim.visual', V: 'vim.visualLine', y: 'vim.yank',
@@ -23,8 +24,34 @@ const defaults: Record<string, string> = {
 // and belong to the key pressed after them, so they are passed through.
 const passThrough = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead']);
 
+// Whether the normal mode claims a key at all: a bare modifier belongs to the key after it, and the window's own
+// shortcuts and typing under an IME are not this mode's.
+const claimed = (event: KeyboardEvent) => !passThrough.has(event.key) && !event.metaKey && !event.altKey && !event.isComposing;
+
+// A key as a sequence token: a modified letter is its own token, so `<C-o>` is one and `gg` is two.
+const keyToken = (event: KeyboardEvent) => {
+  if (event.ctrlKey && event.key.length === 1) return `<C-${event.key.toLowerCase()}>`;
+  if (event.key === 'Escape') return '<Esc>';
+  return event.key.length === 1 ? event.key : '';
+};
+
 // A sequence is a run of keys a reader presses: `gg` is two of them, `<C-o>` is one.
 const tokens = (sequence: string) => sequence.match(/<[^>]+>|./gu) ?? [];
+
+// The keys a page ends up with, out of the table above and its own config.
+const bindingsOf = (keys?: VimKeys) => {
+  const bindings: Record<string, string> = { ...defaults };
+  for (const [sequence, command] of Object.entries(keys ?? {})) {
+    if (command === false) delete bindings[sequence];
+    else bindings[sequence] = command;
+  }
+  return bindings;
+};
+
+// Which command one key runs on its own under a page's config, for a page that answers that key outside the editor.
+export const vimCommand = (event: KeyboardEvent, keys?: VimKeys) => {
+  if (claimed(event)) return bindingsOf(keys)[keyToken(event)];
+};
 
 // One step into a sequence: the command it completes, and the keys that would carry it on.
 type Step = { command?: string; next: Map<string, Step> };
@@ -39,19 +66,16 @@ type VimOptions = {
   definition?: () => void;
   // Where `<C-f>` opens the page's picker over files, text and symbols.
   search?: () => void;
+  // What `<C-p>` does: the next way to read the file.
+  nextMode?: () => void;
   // Where `y` puts what the selection holds.
   copy?: (text: string) => void;
 };
 
 // The normal mode of a preview: it moves the caret, pages and searches, and never writes, since the text is a reader's.
-export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}, jumpBack, jumpForward, definition, search, copy }: VimOptions = {}) {
-  const bindings: Record<string, string> = { ...defaults };
-  for (const [sequence, command] of Object.entries(keys)) {
-    if (command === false) delete bindings[sequence];
-    else bindings[sequence] = command;
-  }
+export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys, jumpBack, jumpForward, definition, search, nextMode, copy }: VimOptions = {}) {
   const root: Step = { next: new Map() };
-  for (const [sequence, command] of Object.entries(bindings)) {
+  for (const [sequence, command] of Object.entries(bindingsOf(keys))) {
     let node = root;
     for (const token of tokens(sequence)) {
       let child = node.next.get(token);
@@ -157,6 +181,7 @@ export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}
     'vim.jumpForward': () => jumpForward?.(),
     'vim.definition': () => definition?.(),
     'vim.search': () => search?.(),
+    'vim.nextMode': () => nextMode?.(),
     'vim.visual': () => enter('char'),
     'vim.visualLine': () => enter('line'),
     'vim.yank': yank,
@@ -177,20 +202,17 @@ export function vimKeys(editor: monaco.editor.IStandaloneCodeEditor, { keys = {}
     if (visual && !extending) visual = undefined;
   };
 
-  // A key as a sequence token: a modified letter is its own token, so `<C-o>` is one and `gg` is two.
-  const tokenOf = (event: KeyboardEvent) => {
-    if (event.ctrlKey && event.key.length === 1) return `<C-${event.key.toLowerCase()}>`;
-    if (event.key === 'Escape') return '<Esc>';
-    return event.key.length === 1 ? event.key : '';
-  };
-
   let node = root;
   let count = 0;
   const onKeyDown = (event: KeyboardEvent) => {
-    if (passThrough.has(event.key)) return;
-    // The window's own shortcuts, and typing that belongs to whatever widget holds it, are not this mode's.
-    if (event.metaKey || event.altKey || event.isComposing || !editor.hasTextFocus()) { endSeek(); return; }
-    const token = tokenOf(event);
+    if (!claimed(event)) {
+      // A bare modifier leaves a seek waiting for the key after it.
+      if (!passThrough.has(event.key)) endSeek();
+      return;
+    }
+    // Typing that belongs to whatever widget holds it is not this mode's either.
+    if (!editor.hasTextFocus()) { endSeek(); return; }
+    const token = keyToken(event);
     if (awaiting) {
       const take = awaiting;
       endSeek();

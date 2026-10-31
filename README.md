@@ -3,6 +3,8 @@
 旺财右侧的文件视图：目录浏览、代码预览（Monaco + 语言服务）、Markdown / HTML / 图片预览，
 以及一个搜文件、搜内容、搜符号的面板。
 
+文本、Markdown 与 HTML 都先以文本打开；有多种读法的文件在地址栏右侧写着当前是哪一种，点一下可以换。
+
 ## 配置
 
 在 `~/.config/wangcai/init.ts` 的标签页条目里写 `config`，改完重启 App 生效：
@@ -61,7 +63,8 @@ config: {
 ### `vim.keys`
 
 代码预览按 vim 的常规模式读，只读，没有插入模式。键只在代码预览里、且代码文本拿着键盘时生效：焦点
-在页头或搜索框里，或者切到 Markdown / HTML 预览时，按键都不响应。
+在页头或搜索框里，或者切到 Markdown / HTML 预览时，按键都不响应；唯一例外是 `<C-p>`，它在文本与 Markdown
+预览里都生效（HTML 预览是独立的页面，点进去之后按键归它）。
 
 默认的键与动作：
 
@@ -75,6 +78,7 @@ config: {
 | `zz` `zt` `zb` | 当前行居中、置顶、置底 |
 | `/` `n` `N` | 编辑器内查找，下一个、上一个匹配 |
 | `<C-f>` | 文件、内容、符号的搜索面板 |
+| `<C-p>` | 换一种方式读这个文件：文本、Markdown 预览、HTML 预览 |
 | `gd` | 跳到光标下名字的定义 |
 | `<C-o>` `<C-i>` | 在跳转过的位置之间后退、前进（跨文件，回到原来那一行） |
 | `f` `F` `t` `T` | 行内找字符，`F` `T` 反向，`t` `T` 停在字符旁边而不落到它上面 |
@@ -98,6 +102,7 @@ config: {
 | `vim.center` `vim.top` `vim.bottom` | 当前行居中、置顶、置底 |
 | `vim.definition` | 跳到定义 |
 | `vim.search` | 打开搜索面板 |
+| `vim.nextMode` | 换一种读法 |
 | `vim.jumpBack` `vim.jumpForward` | 跳转位置的后退与前进 |
 | `vim.seek` `vim.seekBack` `vim.seekTill` `vim.seekTillBack` | 行内找字符的四种 |
 | `vim.seekAgain` `vim.seekAgainBack` | 重复上一次找字符，后者反方向 |

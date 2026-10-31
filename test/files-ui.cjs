@@ -90,6 +90,11 @@ const previewMode = async (panel, mode) => {
   await previewMenu(panel).getByRole('menuitem', { name: mode, exact: true }).click();
   return modes;
 };
+// A page that can be rendered opens as its text, so the rendered one is asked for before it is read.
+const renderedInMarkdown = async (scope, name) => {
+  await previewMode(scope, 'Markdown 预览');
+  await renderedPage(scope, name).waitFor();
+};
 
 // The panel the 文件 tab shows, and the address box above it.
 const filesTabPanel = (page) => page.getByRole('tabpanel', { name: '文件' });
@@ -234,6 +239,7 @@ module.exports = {
   previewMenu,
   previewModes,
   previewMode,
+  renderedInMarkdown,
   filesTabPanel,
   pathBox,
   goToPath,

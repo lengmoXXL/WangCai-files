@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { codeView, collectErrors, cursorLine, dismissSearch, editorLines, goToPath, lists, lspDot, openFilesWorkspace, searchPanel, waitForLine, waitForPath } = require('./files-ui.cjs');
+const { codeView, collectErrors, cursorLine, dismissSearch, editorLines, goToPath, lists, lspDot, markdownPage, openFilesWorkspace, pathBox, renderedPage, searchPanel, waitForLine, waitForPath } = require('./files-ui.cjs');
 
 // What `y` takes is read where it goes: the clipboard.
 const taken = (page, text) => until(async () => (await page.evaluate(() => navigator.clipboard.readText())) === text);
@@ -46,6 +46,27 @@ test('the preview answers vim keys while its text has the keyboard', { timeout: 
   await page.keyboard.press('Control+f');
   await searchPanel(page).waitFor();
   await dismissSearch(page);
+  assert.deepEqual(errors, []);
+}));
+
+test('a page with more than one way to read it opens as text, and ctrl-p cycles them', { timeout: 120000 }, () => withWindow('wangcai-files-vim-modes', lists, async ({ home, page, errors }) => {
+  const file = join(home, 'notes.md');
+  writeFileSync(file, '# Notes title\n\nbody\n');
+  collectErrors(page, errors);
+  await openFilesWorkspace(page);
+  await goToPath(page, file);
+  await codeView(page, '# Notes title').waitFor();
+  assert.equal(await markdownPage(page).count(), 0);
+  await page.keyboard.press('Control+p');
+  await renderedPage(page, 'Notes title').waitFor();
+  await page.keyboard.press('Control+p');
+  await codeView(page, '# Notes title').waitFor();
+  assert.equal(await markdownPage(page).count(), 0);
+  // The address box does not change the view from under the reader.
+  await pathBox(page).focus();
+  await page.keyboard.press('Control+p');
+  await page.waitForTimeout(300);
+  assert.equal(await markdownPage(page).count(), 0);
   assert.deepEqual(errors, []);
 }));
 

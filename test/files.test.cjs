@@ -4,7 +4,7 @@ const { mkdirSync, rmSync, statSync, writeFileSync } = require('node:fs');
 const { basename, join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { activeTerminal, createWorkspace, openView, serveRenderer, until, viewTabs, withHome, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { backButton, clickFile, codeView, collectErrors, columnOf, columns, desktopMain, drawnCloseButtons, editorLines, emptyDirectory, entry, filePicker, filePreview, filesPanels, filesTab, filesTabPanel, forwardButton, goToPath, goToPathEntry, lists, machine, markdownDivider, markdownPage, markdownPane, markdownScroll, modeButton, newSidebarTab, openWorkspaces, pathBox, previewMenu, previewMode, previewModes, refreshButton, renderedPage, runIn, shownPanel, sidebarRight, sidebarToggle, storedHistory, terminalRow, viewMenu, waitForPath, workspaceBar, workspaceTabs } = require('./files-ui.cjs');
+const { backButton, clickFile, codeView, collectErrors, columnOf, columns, desktopMain, drawnCloseButtons, editorLines, emptyDirectory, entry, filePicker, filePreview, filesPanels, filesTab, filesTabPanel, forwardButton, goToPath, goToPathEntry, lists, machine, markdownDivider, markdownPage, markdownPane, markdownScroll, modeButton, newSidebarTab, openWorkspaces, pathBox, previewMenu, previewMode, previewModes, refreshButton, renderedInMarkdown, renderedPage, runIn, shownPanel, sidebarRight, sidebarToggle, storedHistory, terminalRow, viewMenu, waitForPath, workspaceBar, workspaceTabs } = require('./files-ui.cjs');
 
 test('view picker browses current terminal directory; file links preview code, Markdown, HTML and images', { timeout: 180000 }, () => withHome('wangcai-files', lists, async ({ home, env, open }) => {
   let { desktop, page, close } = await open();
@@ -120,7 +120,6 @@ test('view picker browses current terminal directory; file links preview code, M
   const markdownSource = codeView(panel, '# Markdown preview');
   const copy = article.locator('.markdown-code-copy');
   const codeSpans = article.locator('.markdown-code-body span');
-  const renderedMarkdown = renderedPage(article, 'Markdown preview');
   const empty = emptyDirectory(page);
   const previewSection = filePreview(page);
   const toggle = sidebarToggle(page);
@@ -199,7 +198,7 @@ test('view picker browses current terminal directory; file links preview code, M
   assert.equal(await drawnTabs.count(), 1);
   await preview.waitFor();
   await clickLink(pathToFileURL(markdown).href, { label: 'MARKDOWN_LINK' });
-  await renderedMarkdown.waitFor();
+  await renderedInMarkdown(panel, 'Markdown preview');
   assert.equal(await article.locator('strong').innerText(), 'Rendered content');
   assert.equal(await article.locator('table').count(), 1);
   const meta = article.locator('.markdown-meta');
@@ -238,8 +237,7 @@ test('view picker browses current terminal directory; file links preview code, M
   await refresh.click();
   await markdownSource.waitFor();
   assert.equal(await mode.innerText(), '文本');
-  await previewMode(panel, 'Markdown 预览');
-  await renderedMarkdown.waitFor();
+  await renderedInMarkdown(panel, 'Markdown preview');
   // Hovering the sidebar reveals its scrollbar thumbs, so park the pointer before asserting idle panels hide theirs.
   await page.mouse.move(0, 0);
   for (const [view, size] of [[article, ['10px', '12px']], [scroller, ['6px', '6px']]]) {
@@ -294,8 +292,7 @@ test('view picker browses current terminal directory; file links preview code, M
   const [paneWidth, storedFraction] = await pane.evaluate((element) => [element.clientWidth, Number(localStorage.getItem('markdown-width'))]);
   assert.ok(Math.abs(storedFraction - articleWidthAfter / paneWidth) < 0.01, 'the dragged fraction is remembered');
   await previewMode(panel, '文本');
-  await previewMode(panel, 'Markdown 预览');
-  await renderedMarkdown.waitFor();
+  await renderedInMarkdown(panel, 'Markdown preview');
   assert.ok(Math.abs((await article.boundingBox()).width - articleWidthAfter) < 2, 'a page shown again comes back to the dragged width');
 
   // Dragging past the page's minimum width stops the page there.
@@ -324,14 +321,15 @@ test('view picker browses current terminal directory; file links preview code, M
   await back.click();
   await preview.waitFor();
   await forward.click();
-  await renderedMarkdown.waitFor();
+  await renderedInMarkdown(panel, 'Markdown preview');
   const tabCount = await drawnTabs.count();
   await clickLink(pathToFileURL(markdown).href, { label: 'MARKDOWN_LINK' });
-  await renderedMarkdown.waitFor();
+  await renderedInMarkdown(panel, 'Markdown preview');
   assert.equal(await drawnTabs.count(), tabCount);
 
   await page.screenshot({ path: 'test/output/screenshots/files-preview.png' });
   await clickLink(pathToFileURL(html).href, { label: 'HTML_LINK' });
+  await previewMode(panel, 'HTML 预览');
   const htmlFrame = panel.locator('.html-frame');
   const renderedFrame = htmlFrame.contentFrame();
   await renderedFrame.locator('#heading[data-scripted=yes]').waitFor();
@@ -367,7 +365,7 @@ test('view picker browses current terminal directory; file links preview code, M
   assert.equal(await shownColumns.count(), 2, 'a directory below the workspace gets a column of its own');
   await back.click();
   await entry(directory, basename(markdown)).click();
-  await renderedMarkdown.waitFor();
+  await renderedInMarkdown(panel, 'Markdown preview');
   await back.click();
   await sample.waitFor();
   await entry(directory, 'photo.png').click();
@@ -375,8 +373,7 @@ test('view picker browses current terminal directory; file links preview code, M
   await shownImage.waitFor();
   assert.match(await shownImage.getAttribute('src'), /^data:image\/png;base64,/);
   assert.deepEqual(await shownImage.evaluate(async (element) => { await element.decode(); return [element.naturalWidth, element.naturalHeight]; }), [1, 1]);
-  assert.equal(await mode.innerText(), '文本');
-  assert.equal(await mode.getAttribute('aria-haspopup'), null);
+  assert.equal(await mode.count(), 0);
   assert.ok(await forward.isDisabled());
   await toggle.click();
   assert.ok(await right.isHidden());
@@ -408,7 +405,7 @@ test('view picker browses current terminal directory; file links preview code, M
   const subColumn = columnOf(page, subdirectory);
   const insideFile = entry(subColumn, 'inside.md');
   await insideFile.click();
-  await renderedPage(article, 'Directory link preview').waitFor();
+  await renderedInMarkdown(panel, 'Directory link preview');
   await clickLink(pathToFileURL(subdirectory).href, { label: 'DIRECTORY_LINK' });
   assert.equal(await drawnTabs.count(), 1);
   await insideFile.waitFor();
@@ -478,37 +475,35 @@ test('navigation history recovers its position and follows workspace tab ownersh
   const third = { type: 'file', machine, path: latest };
   const errors = [];
   collectErrors(page, errors);
-  let middlePreview = renderedPage(page, 'Middle preview');
   // A plugin's menu entries are drawn when it registers its views, and the clicks below go to those views, so the entry
   // is waited for; the menu is closed at this point, which is why the entry is asked for as attached.
   await viewMenu(page).getByRole('button', { name: '文件', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
   await clickFile(page, first);
   await codeView(page, 'recovered').waitFor();
   await clickFile(page, second);
-  await middlePreview.waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Middle preview');
   await clickFile(page, third);
-  await renderedPage(page, 'Latest preview').waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Latest preview');
   await backButton(page).click();
-  await middlePreview.waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Middle preview');
   assert.deepEqual((await storedHistory(page))[''], { entries: [first, second, third], index: 1 });
   await close();
   ({ page, close } = await open());
   collectErrors(page, errors);
-  middlePreview = renderedPage(page, 'Middle preview');
-  await middlePreview.waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Middle preview');
   assert.ok(await backButton(page).isEnabled());
   assert.ok(await forwardButton(page).isEnabled());
   await createWorkspace(page);
   const firstWorkspace = (await openWorkspaces(page))[0].id;
   await clickFile(page, second);
-  await middlePreview.waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Middle preview');
   await goToPathEntry(page, home, 'first.ts');
   await backButton(page).click();
-  await middlePreview.waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Middle preview');
   await createWorkspace(page);
   const secondWorkspace = (await openWorkspaces(page))[1].id;
   await clickFile(page, third);
-  await renderedPage(page, 'Latest preview').waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Latest preview');
   const history = await storedHistory(page);
   assert.ok(!('' in history));
   assert.deepEqual(history[firstWorkspace], { entries: [first, second, { type: 'directory', machine, path: home }], index: 1 });
@@ -524,10 +519,9 @@ test('navigation history recovers its position and follows workspace tab ownersh
   const workspaces = workspaceTabs(page);
   await workspaces.first().click();
   const onlyTab = filesTab(page);
-  middlePreview = renderedPage(page, 'Middle preview');
   assert.equal(await onlyTab.count(), 1);
   await onlyTab.click();
-  await middlePreview.waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Middle preview');
   const back = backButton(page);
   const forward = forwardButton(page);
   assert.equal(await address.inputValue(), middle);
@@ -536,7 +530,7 @@ test('navigation history recovers its position and follows workspace tab ownersh
   const historyPath = join(home, '.local/share/wangcai/data/files/history.json');
   const mtimeBefore = statSync(historyPath, { bigint: true }).mtimeNs;
   await refreshButton(page).click();
-  await middlePreview.waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Middle preview');
   await onlyTab.click();
   // Asking for the history is a read: the file it comes from is not written again for it.
   await storedHistory(page);
@@ -544,7 +538,7 @@ test('navigation history recovers its position and follows workspace tab ownersh
   await forward.click();
   await firstFile.waitFor();
   await back.click();
-  await middlePreview.waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Middle preview');
   await back.click();
   await codeView(page, 'recovered').waitFor();
   assert.equal(await address.inputValue(), code);
@@ -556,7 +550,7 @@ test('navigation history recovers its position and follows workspace tab ownersh
   });
   await workspaces.last().click();
   await onlyTab.click();
-  await renderedPage(page, 'Latest preview').waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Latest preview');
   assert.ok(await back.isDisabled());
   assert.ok(await forward.isDisabled());
   await drawnCloseButtons(page).last().click();
@@ -577,7 +571,7 @@ test('a file is shown again where it was left', { timeout: 180000 }, () => withW
   writeFileSync(other, '# Other preview');
   await createWorkspace(page);
   await clickFile(page, { type: 'file', machine, path: long });
-  await renderedPage(page, 'Long preview').waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Long preview');
   const pane = markdownPane(filesTabPanel(page));
   // The pane draws its body again once the Markdown has arrived, which drops a scroll taken before that, so the
   // assignment is repeated until it is still there a frame later.
@@ -587,12 +581,12 @@ test('a file is shown again where it was left', { timeout: 180000 }, () => withW
     return element.scrollTop > 0;
   }));
   await clickFile(page, { type: 'file', machine, path: other });
-  await renderedPage(page, 'Other preview').waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Other preview');
   // The offset the pane was left at is written down as the file changes, so the record is what is waited for.
   let keptTop;
   await until(async () => (keptTop = Object.values(await storedHistory(page)).flatMap((history) => history.entries).find((one) => one.path === long)?.top ?? 0) > 0);
   await backButton(page).click();
-  await renderedPage(page, 'Long preview').waitFor();
+  await renderedInMarkdown(shownPanel(page), 'Long preview');
   await until(async () => (await pane.evaluate((element) => element.scrollTop)) === keptTop);
   assert.deepEqual(errors, []);
 }));

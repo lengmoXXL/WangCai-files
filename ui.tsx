@@ -16,7 +16,7 @@ import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoSymbol
 import type { DirectoryEntry, Theme, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { LanguageServices, buffer, languageFor, ownProviders, type FileSymbol } from './lsp';
-import { vimKeys } from './vim';
+import { vimCommand, vimKeys } from './vim';
 import { imageMime, machineKey, type FileClick, type Font, type GitHunk, type GitLines, type GitStatus, type History, type HistoryEntry, type Position, type SearchHit, type Settings, type VimKeys } from './shared';
 import './style.css';
 
@@ -231,7 +231,7 @@ function DiffPeek({ path, change, area, rowTop, close }: { path: string; change:
   </div>;
 }
 
-function Preview({ file, text, mode, hunks, navigate, onModel, remember, previewing, jumps, openSearch }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean; jumps: Jumps; openSearch: () => void }) {
+function Preview({ file, text, mode, hunks, navigate, onModel, remember, previewing, jumps, openSearch, nextMode }: { file: HistoryEntry; text: string; mode: Mode; hunks: GitHunk[]; navigate: (file: FileClick) => void; onModel: (model?: monaco.editor.ITextModel) => void; remember: Remember; previewing: boolean; jumps: Jumps; openSearch: () => void; nextMode: () => void }) {
   const element = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   // The preview document asks for its content as soon as it loads, so the listener has to be in place first.
@@ -353,7 +353,7 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
     // The page answers vim-style keys while its text has the keyboard; the picker's box and monaco's own widgets keep theirs.
     const vim = vimKeys(editor, {
       keys: vimSettings, jumpBack: () => walk(-1), jumpForward: () => walk(1), definition, search: openSearch,
-      copy: (text) => void navigator.clipboard.writeText(text).catch(() => undefined),
+      nextMode, copy: (text) => void navigator.clipboard.writeText(text).catch(() => undefined),
     });
     const opened = editor.onMouseDown((event) => {
       // A click on a gutter mark opens the block it stands for.
@@ -547,6 +547,9 @@ function MarkdownPage({ text, top, remember }: { text: string; top?: number; rem
   </div>;
 }
 
+// Whether the keyboard is being typed into a box, which keeps its keys to itself.
+const writing = (target: EventTarget | null) => target instanceof HTMLElement && ['INPUT', 'TEXTAREA'].includes(target.tagName);
+
 function FileView(props: NavigationProps & { holder: string; remember: Remember; previewing: boolean; jumps: Jumps }) {
   const { context, file, holder, navigate, remember, previewing, jumps, openSearch } = props;
   const [text, setText] = useState<string>();
@@ -583,7 +586,21 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
     read();
     return () => { alive = false; stop(); };
   }, [context, holder, file.path]);
-  const [mode, setMode] = useState<Mode>(html ? 'html' : markdown ? 'markdown' : 'text');
+  // A file with a text view opens as that text.
+  const [mode, setMode] = useState<Mode>('text');
+  const nextMode = () => setMode((current) => modes[(modes.indexOf(current) + 1) % modes.length]);
+  // A rendered view has no editor to hold the keys of the normal mode, so the one key that leaves it is taken here; the
+  // editor's own keys answer first, which is what `defaultPrevented` reports.
+  useEffect(() => {
+    if (modes.length < 2) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || writing(event.target) || vimCommand(event, vimSettings) !== 'vim.nextMode') return;
+      event.preventDefault();
+      nextMode();
+    };
+    addEventListener('keydown', onKeyDown);
+    return () => removeEventListener('keydown', onKeyDown);
+  }, [modes.length]);
   const [model, setModel] = useState<monaco.editor.ITextModel>();
   return <section className="file-preview" aria-label="文件预览">
     <Navigation {...props}>
@@ -593,7 +610,7 @@ function FileView(props: NavigationProps & { holder: string; remember: Remember;
     {error ? <div className="file-message" role="alert">{error}</div>
       : text === undefined ? <div className="file-message">正在读取…</div>
       : image ? <div className="image-preview"><img src={text} alt={file.path} /></div>
-      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} previewing={previewing} jumps={jumps} openSearch={openSearch} />}
+      : <Preview file={file} text={text} mode={mode} hunks={hunks} onModel={setModel} navigate={navigate} remember={remember} previewing={previewing} jumps={jumps} openSearch={openSearch} nextMode={nextMode} />}
   </section>;
 }
 
