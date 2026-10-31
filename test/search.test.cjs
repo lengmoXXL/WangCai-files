@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdirSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { codeView, collectErrors, dismissSearch, filesEmpty, goToPath, lists, openFilesWorkspace, openSearch, pathBox, search, searchInput, searchMarks, searchNote, searchPanel, searchRow, searchRows, submitSearch, waitForLine, waitForPath } = require('./files-ui.cjs');
+const { codeView, collectErrors, dismissSearch, editorFocused, filesEmpty, goToPath, lists, openFilesWorkspace, openSearch, pathBox, search, searchInput, searchMarks, searchNote, searchPanel, searchRow, searchRows, submitSearch, waitForLine, waitForPath } = require('./files-ui.cjs');
 
 test('the search box finds files, text and symbols, and Enter opens what it found', { timeout: 120000 }, () => withWindow('wangcai-files-search', lists, async ({ home, page, errors }) => {
   const main = join(home, 'main.ts');
@@ -47,7 +47,7 @@ test('the search box finds files, text and symbols, and Enter opens what it foun
   await codeView(page, 'nested = 1').waitFor();
   await submitSearch(page);
   // The picker that closes hands the keyboard to the page it opened.
-  await until(async () => page.evaluate(() => Boolean(document.activeElement?.closest('.code-preview'))));
+  await until(() => editorFocused(page));
 
   // A leading > asks rg for the pattern, and a row says the file and line it was found on.
   await search(page, '>GREP_TARGET');

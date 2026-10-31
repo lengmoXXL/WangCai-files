@@ -129,6 +129,9 @@ const cursorLine = (page) => page.evaluate(() => {
 });
 const waitForLine = (page, text) => until(async () => (await cursorLine(page)) === text);
 
+// Whether the keyboard is in the preview's editor.
+const editorFocused = (page) => page.evaluate(() => Boolean(document.activeElement?.closest('.code-preview')));
+
 // The buttons of a panel's header.
 const backButton = (page) => page.getByRole('button', { name: '后退', exact: true });
 const forwardButton = (page) => page.getByRole('button', { name: '前进', exact: true });
@@ -249,6 +252,7 @@ module.exports = {
   codeView,
   cursorLine,
   waitForLine,
+  editorFocused,
   backButton,
   forwardButton,
   refreshButton,

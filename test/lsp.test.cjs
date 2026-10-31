@@ -5,7 +5,7 @@ const { existsSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { until, wangcaiApp, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { backButton, closeWorkspace, codeView, cursorLine, filePreview, goToPath, lists, lspDetail, lspDot, openFilesWorkspace, pathBox, refreshButton, storedHistory, waitForLine, waitForPath, workspaceTabs } = require('./files-ui.cjs');
+const { backButton, closeWorkspace, codeView, cursorLine, editorFocused, filePreview, goToPath, lists, lspDetail, lspDot, openFilesWorkspace, pathBox, refreshButton, storedHistory, waitForLine, waitForPath, workspaceTabs } = require('./files-ui.cjs');
 
 // The processes whose command line holds this text: ps is read once and cut here, so every probe cuts the same way.
 const pids = (text) => execFileSync('sh', ['-c', 'ps -Ao pid,command'], { encoding: 'utf8' })
@@ -104,7 +104,6 @@ test('the right-click menu answers definitions, type definitions, and references
   await openFilesWorkspace(page);
   await goToPath(page, main);
   await codeView(page, 'new Square').waitFor();
-  const focused = () => page.evaluate(() => Boolean(document.activeElement?.closest('.code-preview')));
   const menu = page.getByRole('menu', { name: '语言服务' });
   const openMenu = async (line, token) => {
     // Waited for: the token being drawn, the menu opening, and the click landing on the line asked for, since the
@@ -147,12 +146,12 @@ test('the right-click menu answers definitions, type definitions, and references
   // The jump is recorded against the file it left.
   const leftEntry = Object.values(await storedHistory(page)).flatMap((history) => history.entries).filter((entry) => entry.path === main).at(-1);
   assert.equal(leftEntry.line, 5);
-  assert.ok(await focused());
+  assert.ok(await editorFocused(page));
   // Going back returns to the line the jump started from, with the cursor focused there.
   await backButton(page).click();
   await waitForPath(page, main);
   await waitForLine(page, 'const shape: Shape = new Square();');
-  assert.ok(await focused());
+  assert.ok(await editorFocused(page));
   // The type of the annotation is the interface the class implements.
   await jump('const shape: Shape = new Square();', 'Shape', '转到类型定义', shapes);
   await waitForLine(page, 'export interface Shape {');
@@ -174,7 +173,7 @@ test('the right-click menu answers definitions, type definitions, and references
   await shown.dblclick();
   await waitForPath(page, shapes);
   await waitForLine(page, 'export const answer = 42;');
-  assert.ok(await focused());
+  assert.ok(await editorFocused(page));
   // The menu follows what the server answers, not where the cursor is: a declaration offers the jumps too.
   await openMenu('export const answer = 42;', 'answer');
   assert.deepEqual(await menu.getByRole('menuitem').allTextContents(), ['转到定义', '转到实现', '转到类型定义', '查找引用']);

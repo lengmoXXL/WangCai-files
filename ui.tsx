@@ -397,11 +397,21 @@ function Preview({ file, text, mode, hunks, navigate, onModel, remember, preview
       scrolled.dispose(); moved.dispose(); opened.dispose(); vim.dispose(); editor.dispose(); onModel(undefined);
     };
   }, [text, mode, remember]);
-  // Every open, and every rebuild of the editor, puts the caret and the keyboard in the preview — unless the page is
-  // only showing what a picker's selection stands for, where taking the keyboard would end the name being typed.
+  // The keyboard belongs in the preview, unless the page is only showing what a picker's selection stands for, where
+  // taking it would end the name being typed.
+  const focusEditor = () => { if (!previewing) control.current?.focus(); };
+  // The text and the mode are watched because they rebuild the editor, which is a new one to hand the keyboard to.
   useEffect(() => {
-    if (!previewing) control.current?.focus();
+    focusEditor();
   }, [previewing, text, mode]);
+  // A key that shows this view leaves the keyboard on the plugin's page rather than in the editor, so the page hands it
+  // over when it hears that it was shown — a listener here, since the page's focus alone does not say who shows it.
+  useEffect(() => {
+    const page = element.current?.closest<HTMLElement>('[data-plugin]');
+    if (!page) return;
+    page.addEventListener('wangcai:shown', focusEditor);
+    return () => page.removeEventListener('wangcai:shown', focusEditor);
+  }, [previewing]);
   // Where the view sits: the offset the file was left at, or else the line the entry was opened at, which a jump inside
   // the file moves to as well. An editor that was built again starts at its own top, so the offset is taken for it once
   // more; a panel that has given it no height yet places it on the first layout instead.
