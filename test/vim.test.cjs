@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { codeView, collectErrors, cursorLine, dismissSearch, editorLines, goToPath, lists, lspDot, markdownPage, openFilesWorkspace, pathBox, renderedPage, searchPanel, waitForLine, waitForPath } = require('./files-ui.cjs');
+const { codeView, collectErrors, cursorLine, dismissSearch, editorLines, goToPath, lists, lspDot, markdownPage, openFilesWorkspace, pathBox, previewMode, renderedPage, searchPanel, shownPanel, waitForLine, waitForPath } = require('./files-ui.cjs');
 
 // What `y` takes is read where it goes: the clipboard.
 const taken = (page, text) => until(async () => (await page.evaluate(() => navigator.clipboard.readText())) === text);
@@ -67,6 +67,15 @@ test('a page with more than one way to read it opens as text, and ctrl-p cycles 
   await page.keyboard.press('Control+p');
   await page.waitForTimeout(300);
   assert.equal(await markdownPage(page).count(), 0);
+  // The type control the header offers is the other way back out of a rendered page, both in and out.
+  await previewMode(shownPanel(page), 'Markdown 预览');
+  await renderedPage(page, 'Notes title').waitFor();
+  await page.keyboard.press('Control+p');
+  await codeView(page, '# Notes title').waitFor();
+  await previewMode(shownPanel(page), 'Markdown 预览');
+  await renderedPage(page, 'Notes title').waitFor();
+  await previewMode(shownPanel(page), '文本');
+  await codeView(page, '# Notes title').waitFor();
   assert.deepEqual(errors, []);
 }));
 
