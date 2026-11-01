@@ -1,444 +1,53 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdirSync, rmSync, statSync, writeFileSync } = require('node:fs');
-const { basename, join } = require('node:path');
-const { pathToFileURL } = require('node:url');
-const { activeTerminal, createWorkspace, openView, serveRenderer, until, viewTabs, withHome, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { backButton, clickFile, codeView, collectErrors, columnOf, columns, desktopMain, drawnCloseButtons, editorLines, emptyDirectory, entry, filePicker, filePreview, filesPanels, filesTab, filesTabPanel, forwardButton, goToPath, goToPathEntry, lists, machine, newSidebarTab, openFilesWorkspace, openWorkspaces, pathBox, picture, refreshButton, runIn, shownPanel, sidebarRight, sidebarToggle, storedHistory, terminalRow, viewMenu, waitForLine, waitForPath, workspaceBar, workspaceTabs } = require('./files-ui.cjs');
+const { mkdirSync, writeFileSync } = require('node:fs');
+const { join } = require('node:path');
+const { withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { alert, clickFile, codeView, columnOf, columns, editorTab, emptyDirectory, entry, filesPanels, filesTab, lists, machine, openFilesWorkspace, shownPanel, waitForPath } = require('./files-ui.cjs');
 
-test('view picker browses the terminal directory, and every file link opens as text or says it cannot be read', { timeout: 180000 }, () => withHome('wangcai-files', lists, async ({ home, env, open }) => {
-  let { page, close } = await open();
-  const code = join(home, 'sample.ts');
-  const markdown = join(home, '说明 file.md');
-  const binary = join(home, 'binary.bin');
-  const html = join(home, 'page.html');
-  const json = join(home, 'settings.json');
-  const subdirectory = join(home, 'sub');
-  writeFileSync(json, '{"ready":true}');
-  writeFileSync(code, 'const first = 1;\nconst second = "CODE_PREVIEW";\n');
-  writeFileSync(markdown, '# Markdown preview\n');
-  writeFileSync(html, '<!-- HTML_SOURCE -->\n');
-  writeFileSync(binary, Buffer.from([0, 1, 255, 2]));
-  writeFileSync(join(home, 'photo.png'), picture);
-  const errors = [];
-  collectErrors(page, errors);
-  await page.evaluate(() => { window.linkClicks = []; window.wangcai.subscribe('onclick', (payload) => window.linkClicks.push(payload)); });
-  await createWorkspace(page);
-  const sessionId = (await openWorkspaces(page))[0].sessionId;
-  // A wide or differently styled character gets a span of its own, so the text is looked for one
-  // node at a time and the first character of the link is enough for the point.
-  const firstChar = (row, label) => row.evaluate((element, label) => {
-    const nodes = [];
-    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-    for (let node; node = walker.nextNode();) nodes.push(node);
-    const pointAt = (node, index) => {
-      const range = document.createRange();
-      range.setStart(node, index); range.setEnd(node, index + 1);
-      const rect = range.getBoundingClientRect();
-      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-    };
-    for (const node of nodes) {
-      const index = node.textContent.indexOf(label);
-      if (index >= 0) return pointAt(node, index);
-    }
-    for (const node of nodes) {
-      const index = node.textContent.indexOf(label[0]);
-      if (index >= 0) return pointAt(node, index);
-    }
-    throw new Error('Link text not found');
-  }, label);
-  const cursor = page.locator('.xterm-cursor-pointer');
-  // The point is asked for again on every round: a row redraws as output arrives, so where a link sits is only good for
-  // the moment it was read.
-  const clickPoint = async (pointOf) => {
-    // Away from every link first, so the cursor belongs to this hover and not to the last one.
-    await until(async () => (await cursor.count()) === 0, { act: () => page.mouse.move(500, 500) });
-    await page.evaluate(() => { window.linkClicks = []; });
-    // Command is what shows a terminal link and what opens it, so it is held across the hover and the click.
-    await page.keyboard.down('Meta');
-    // The line can only be answered once the plugin has looked its paths up, so the hover is given more than one try.
-    let point;
-    await until(() => cursor.isVisible(), {
-      act: async () => {
-        point = await pointOf();
-        // Off the row and back: the app answers a line again once the pointer returns to it.
-        await page.mouse.move(500, 500);
-        await page.mouse.move(point.x, point.y);
-      },
-    });
-    // A cursor that was already there ends the wait before the first move, so the point is read for the click itself.
-    point ??= await pointOf();
-    await page.mouse.click(point.x, point.y);
-    await page.keyboard.up('Meta');
-  };
-  const terminal = activeTerminal(page);
-  // A line printed before the shell ran the one before it lands on top of it and leaves the quotes open, which the
-  // shell answers with a continuation prompt and never runs, so whatever is pending is dropped first.
-  const printLine = async (text, cwd = home) => {
-    await terminal.locator('.xterm-helper-textarea').focus();
-    await page.keyboard.press('Control+C');
-    await runIn(terminal, `cd '${cwd}'; printf '\\033[2J\\033[H%b\\n' '${text}'`);
-  };
-  const clickLink = async (link, { label = link, cwd = home, anchor = label } = {}) => {
-    const output = label === link ? link : `\\033]8;;${link}\\007${label}\\033]8;;\\007`;
-    await printLine(output, cwd);
-    const row = terminalRow(terminal, label);
-    // A command typed while the shell is busy is lost, so the line is printed again until it is the row on show.
-    await until(async () => (await row.count()) > 0 && (await row.textContent()).trim() === label, {
-      act: () => printLine(output, cwd),
-    });
-    await clickPoint(() => firstChar(row, anchor));
-  };
-  const clickCount = () => page.evaluate(() => window.linkClicks.length);
-  const lastClick = async () => {
-    // The click crosses the plugin channel, so wait for its answer instead of the last one.
-    await until(() => page.evaluate(() => window.linkClicks.length > 0));
-    const { type, path, line, column } = await page.evaluate(() => window.linkClicks.at(-1));
-    return { type, path, line, column };
-  };
-  const right = sidebarRight(page);
-  assert.ok(await right.isHidden());
-  await openView(page, '文件');
-  const address = pathBox(page);
-  const panel = filesTabPanel(page);
-  const back = backButton(page);
-  const forward = forwardButton(page);
-  const refresh = refreshButton(page);
-  const directory = columnOf(page, home);
-  const shownColumns = columns(page);
-  const drawnTabs = viewTabs(page);
-  const sample = entry(directory, 'sample.ts');
-  const refreshFile = entry(directory, 'refresh.md');
-  const preview = codeView(panel, 'CODE_PREVIEW');
-  const lines = editorLines(panel);
-  const markdownSource = codeView(panel, '# Markdown preview');
-  const empty = emptyDirectory(page);
-  const previewSection = filePreview(page);
-  const toggle = sidebarToggle(page);
-  const alert = page.getByRole('alert');
-  await sample.waitFor();
-  assert.equal(await shownColumns.count(), 1, 'the picker starts at the workspace directory');
-  assert.deepEqual(await shownColumns.evaluate((column) => {
-    const container = column.parentElement.getBoundingClientRect();
-    return [Math.round(column.getBoundingClientRect().left - container.left), column.parentElement.scrollLeft];
-  }), [0, 0], 'the leftmost column is aligned with the pane');
-  assert.equal(await address.inputValue(), home);
-  assert.ok(await back.isDisabled());
-  assert.ok(await forward.isDisabled());
-  writeFileSync(join(home, 'refresh.md'), '# Refreshed directory');
-  await refresh.click();
-  await refreshFile.waitFor();
-  assert.ok(await back.isDisabled());
-  assert.ok(await forward.isDisabled());
-  await sample.click();
-  await preview.waitFor();
-  // The path above the file opens the picker, and the file it was opened from comes back marked.
-  await address.click();
-  await sample.waitFor();
-  assert.equal(await sample.getAttribute('aria-current'), 'true');
-  assert.equal(await lines.count(), 0);
-  await sample.click();
-  await preview.waitFor();
-  assert.equal(await drawnTabs.count(), 1);
-  writeFileSync(code, 'const first = 1;\nconst second = "CODE_PREVIEW";\nconst refreshed = true;\n');
-  await refresh.click();
-  await codeView(panel, 'refreshed').waitFor();
-  await back.click();
-  await sample.waitFor();
-  assert.ok(await back.isDisabled());
-  assert.ok(await forward.isEnabled());
-  await refresh.click();
-  await refreshFile.waitFor();
-  assert.ok(await back.isDisabled());
-  assert.ok(await forward.isEnabled());
-  await forward.click();
-  await preview.waitFor();
-  assert.equal(await address.inputValue(), code);
-  await goToPath(page, 'missing.ts');
-  await alert.filter({ hasText: '路径不存在' }).waitFor();
-  await address.press('Escape');
-  assert.equal(await address.inputValue(), code);
-  // The picker draws a message area of its own, so this is not the alert the rest of the case waits for.
-  assert.equal(await filePicker(page).getByRole('alert').count(), 0);
-  await goToPath(page, './sample.ts');
-  await waitForPath(page, code);
-  await preview.waitFor();
-  await toggle.click();
-  await clickLink(`${code}:2:3`);
-  await previewSection.waitFor();
-  assert.equal(await address.inputValue(), code);
-  assert.equal(await panel.locator('.preview-header').evaluate((element) => getComputedStyle(element).fontSize), '12px');
-  assert.equal(await lines.evaluate((element) => getComputedStyle(element).fontSize), '12px');
-  await page.screenshot({ path: 'test/output/screenshots/files-code.png' });
-  assert.equal(await previewSection.locator('.monaco-editor').evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(18, 19, 20)');
-  await preview.waitFor();
-  const workerReady = page.waitForEvent('worker');
-  await page.evaluate(() => { window.MonacoEnvironment.getWorker('', 'editorWorkerService'); });
-  const worker = await workerReady;
-  await until(() => worker.evaluate(() => typeof self.onmessage === 'function'));
-  const textBeforeEdit = await lines.innerText();
-  await lines.click();
-  await page.keyboard.type('SHOULD_NOT_EDIT');
-  assert.equal(await lines.innerText(), textBeforeEdit);
-  const terminalBox = await desktopMain(page).boundingBox();
-  const fileBox = await right.boundingBox();
-  assert.ok(fileBox.x >= terminalBox.x + terminalBox.width);
-  mkdirSync(subdirectory);
-  await clickLink('../sample.ts:2:3', { cwd: subdirectory });
-  assert.equal(await drawnTabs.count(), 1);
-  await preview.waitFor();
-  await clickLink(pathToFileURL(markdown).href, { label: 'MARKDOWN_LINK' });
-  // A page is a file like any other here.
-  await markdownSource.waitFor();
-  assert.equal(await address.inputValue(), markdown);
-  await page.screenshot({ path: 'test/output/screenshots/files-markdown.png' });
-  const tabCount = await drawnTabs.count();
-  await back.click();
-  await preview.waitFor();
-  await forward.click();
-  await markdownSource.waitFor();
-  // Walking the history of one entry is not another tab.
-  assert.equal(await drawnTabs.count(), tabCount);
-
-  await page.screenshot({ path: 'test/output/screenshots/files-preview.png' });
-  await clickLink(pathToFileURL(html).href, { label: 'HTML_LINK' });
-  await codeView(panel, 'HTML_SOURCE').waitFor();
-  assert.equal(await address.inputValue(), html);
-  await clickLink(pathToFileURL(json).href, { label: 'JSON_LINK' });
-  await codeView(panel, 'ready').waitFor();
-  await until(() => lines.evaluate((element) => new Set([...element.querySelectorAll('.view-line span')].map((span) => getComputedStyle(span).color)).size > 1));
-  await clickLink(pathToFileURL(binary).href, { label: 'BINARY_LINK' });
-  await alert.filter({ hasText: '暂不支持二进制' }).waitFor();
-  const tabCountBeforeMissing = await drawnTabs.count();
-  await clickLink(pathToFileURL(join(home, 'missing.ts')).href, { label: 'MISSING_LINK' });
-  const clickCountBeforeMissing = await clickCount();
-  await page.evaluate(({ sessionId, path }) => window.wangcai.call('request', 'terminal-agent', 'click', { sessionId, location: { path } }), { sessionId, path: 'missing.ts' });
-  assert.equal(await clickCount(), clickCountBeforeMissing);
-  assert.equal(await drawnTabs.count(), tabCountBeforeMissing);
-  assert.equal(await alert.filter({ hasText: 'No such file' }).count(), 0);
-  await goToPath(page, home);
-  // The handle is taken before the click, since a column that is read again would replace its buttons.
-  const sampleButton = await sample.elementHandle();
-  await entry(directory, 'sub/').click();
-  await waitForPath(page, subdirectory);
-  await empty.waitFor();
-  assert.ok(await page.evaluate((node) => document.contains(node), sampleButton), 'the column above keeps its entries');
-  assert.equal(await shownColumns.count(), 2, 'a directory below the workspace gets a column of its own');
-  await back.click();
-  await entry(directory, basename(markdown)).click();
-  await markdownSource.waitFor();
-  await back.click();
-  await sample.waitFor();
-  await entry(directory, 'photo.png').click();
-  await alert.filter({ hasText: '暂不支持二进制' }).waitFor();
-  assert.ok(await forward.isDisabled());
-  await toggle.click();
-  assert.ok(await right.isHidden());
-  await openView(page, '文件');
-  await alert.filter({ hasText: '暂不支持二进制' }).waitFor();
-  await goToPathEntry(page, home, 'sample.ts');
-  await page.screenshot({ path: 'test/output/screenshots/files-picker.png' });
-  await runIn(terminal, `cd '${subdirectory}'`);
-  await until(() => page.evaluate(async ({ reader, id, path }) => {
-    const result = await window.wangcai.call('request', 'files', 'list', { machine: reader, sessionId: id });
-    return result.path === path;
-  }, { reader: machine, id: sessionId, path: subdirectory }));
-  const workspaces = workspaceTabs(page);
-  await workspaces.filter({ hasText: 'sub' }).waitFor();
-  await openView(page, '文件');
-  await sample.waitFor();
-  await goToPath(page, 'sub');
-  await empty.waitFor();
-  assert.equal(await address.inputValue(), subdirectory);
-  await createWorkspace(page);
-  await openView(page, '文件');
-  await sample.waitFor();
-  await workspaces.first().click();
-  await empty.waitFor();
-  await page.screenshot({ path: 'test/output/screenshots/files-picker-empty.png' });
-  writeFileSync(join(home, 'sub', 'inside.md'), '# Directory link preview');
-  await clickLink('./sub/');
-  await filesTab(page).waitFor();
-  const subColumn = columnOf(page, subdirectory);
-  const insideFile = entry(subColumn, 'inside.md');
-  await insideFile.click();
-  await codeView(panel, '# Directory link preview').waitFor();
-  await clickLink(pathToFileURL(subdirectory).href, { label: 'DIRECTORY_LINK' });
-  assert.equal(await drawnTabs.count(), 1);
-  await insideFile.waitFor();
-  await goToPathEntry(page, home, 'sample.ts');
-  assert.equal((await openWorkspaces(page))[0].sessionId, sessionId);
-  await clickLink('sample.ts(2,3)');
-  assert.deepEqual(await lastClick(), { type: 'file', path: code, line: 2, column: 3 });
-  await clickLink('"说明 file.md", line 3', { anchor: '说明 file.md' });
-  assert.deepEqual(await lastClick(), { type: 'file', path: markdown, line: 3, column: undefined });
-  await printLine('missing.ts:12');
-  const missingRow = terminalRow(terminal, 'missing.ts:12');
-  await missingRow.waitFor();
-  const clicksSoFar = await clickCount();
-  // With Command held, a cursor here would mean the path that does not exist became a link, and only a hover away and
-  // back counts as the app having answered the row.
-  await page.keyboard.down('Meta');
-  let missingPoint;
-  for (let round = 0; round < 3; round += 1) {
-    missingPoint = await firstChar(missingRow, 'missing.ts:12');
-    await page.mouse.move(500, 500);
-    await page.mouse.move(missingPoint.x, missingPoint.y);
-    await page.waitForTimeout(300);
-  }
-  assert.equal(await cursor.count(), 0);
-  await page.mouse.click(missingPoint.x, missingPoint.y);
-  // A click that did open something is published on the channel the hover is answered through, so it is given the same
-  // window the hover had before its silence counts.
-  await page.waitForTimeout(900);
-  assert.equal(await clickCount(), clicksSoFar);
-  await page.keyboard.up('Meta');
-  // A link click still reaches the plugin while its own panel is behind another one. The sidebar's terminal draws its
-  // rows on a canvas, so the link is clicked in the workspace's terminal instead.
-  await newSidebarTab(page).evaluate((element) => element.click());
-  await viewMenu(page).getByRole('button', { name: '终端', exact: true }).click();
-  await shownPanel(page).locator('.terminal-pane').waitFor();
-  await clickLink('sample.ts:2');
-  assert.deepEqual(await lastClick(), { type: 'file', path: code, line: 2, column: undefined });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollTop), 0);
-  const stopRenderer = await serveRenderer(env);
-  // This reopen is about the plugin mounting in a new window, not about the tabs the closed one saved.
-  rmSync(join(home, '.local/share/wangcai/data/core/tabs.json'), { force: true });
-  await close();
-  ({ page, close } = await open());
-  collectErrors(page, errors);
-  await workspaceBar(page).waitFor();
-  // The window this reopen made is a page of its own, so its preview is taken from the page that is open now.
-  const reopenedPreview = codeView(filesTabPanel(page), 'CODE_PREVIEW');
-  // The click is the part the plugin may have missed while it mounted. Once the preview is there, another click is
-  // what would take it away again, so waiting for it to show asks for nothing more than that it shows.
-  await until(() => reopenedPreview.isVisible(), {
-    act: () => clickFile(page, { type: 'file', machine, path: code }),
-  });
-  assert.deepEqual(errors, []);
-  await stopRenderer();
-}));
-
-test('a file is shown again where it was left', { timeout: 120000 }, () => withWindow('wangcai-files-position', lists, async ({ home, page, errors }) => {
-  const long = join(home, 'long.ts');
-  const other = join(home, 'other.ts');
-  writeFileSync(long, Array.from({ length: 400 }, (_, index) => `const line${index + 1} = ${index + 1};`).join('\n') + '\n');
-  writeFileSync(other, 'export const other = 1;\n');
+test('a directory opens a column of its own, and a file is handed to the editor instead of being read here', { timeout: 180000 }, () => withWindow('wangcai-files', lists, async ({ home, page, errors }) => {
+  mkdirSync(join(home, 'sub/empty'), { recursive: true });
+  writeFileSync(join(home, 'sample.ts'), 'const first = 1;\n');
+  writeFileSync(join(home, 'sub/inside.md'), '# Inside\n');
   await openFilesWorkspace(page);
-  await goToPath(page, long);
-  await codeView(page, 'const line1 = 1;').waitFor();
-  // Down at the end of the file, which is where the offset is written down as the editor scrolls.
-  await page.keyboard.press('G');
-  await codeView(page, 'const line400 = 400;').waitFor();
-  await goToPath(page, other);
-  await waitForLine(page, 'export const other = 1;');
-  await backButton(page).click();
-  await waitForPath(page, long);
-  // The editor comes back where it was left rather than at its top: the first line drawn is far into the file.
-  // Monaco pads what it draws with no-break spaces, which are read as spaces here.
-  await until(async () => /^const line3\d\d =/.test((await editorLines(page).innerText()).replace(/\u00a0/g, ' ').split('\n')[0]));
-  assert.deepEqual(errors, []);
-}));
-
-test('navigation history recovers its position and follows workspace tab ownership', { timeout: 180000 }, () => withHome('wangcai-files-recover', { workspaces: ['terminal-agent'], tabs: ['files'] }, async ({ home, open }) => {
-  let { page, close } = await open();
-  const code = join(home, 'first.ts');
-  const middle = join(home, 'middle.md');
-  const latest = join(home, 'latest.md');
-  writeFileSync(code, 'const first = 1;\nconst recovered = true;\n');
-  // A body line of its own, which is what the case waits for while it walks the history.
-  writeFileSync(middle, '# Middle preview\n\nmiddle-body\n');
-  writeFileSync(latest, '# Latest preview\n\nlatest-body\n');
-  const first = { type: 'file', machine, path: code, line: 2, column: 3 };
-  const second = { type: 'file', machine, path: middle };
-  const third = { type: 'file', machine, path: latest };
-  const errors = [];
-  collectErrors(page, errors);
-  // A plugin's menu entries are drawn when it registers its views, and the clicks below go to those views, so the entry
-  // is waited for; the menu is closed at this point, which is why the entry is asked for as attached.
-  await viewMenu(page).getByRole('button', { name: '文件', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
-  await clickFile(page, first);
-  await codeView(page, 'recovered').waitFor();
-  await clickFile(page, second);
-  await codeView(shownPanel(page), 'middle-body').waitFor();
-  await clickFile(page, third);
-  await codeView(shownPanel(page), 'latest-body').waitFor();
-  await backButton(page).click();
-  await codeView(shownPanel(page), 'middle-body').waitFor();
-  assert.deepEqual((await storedHistory(page))[''], { entries: [first, second, third], index: 1 });
-  await close();
-  ({ page, close } = await open());
-  collectErrors(page, errors);
-  await codeView(shownPanel(page), 'middle-body').waitFor();
-  assert.ok(await backButton(page).isEnabled());
-  assert.ok(await forwardButton(page).isEnabled());
-  await createWorkspace(page);
-  const firstWorkspace = (await openWorkspaces(page))[0].id;
-  await clickFile(page, second);
-  await codeView(shownPanel(page), 'middle-body').waitFor();
-  await goToPathEntry(page, home, 'first.ts');
-  await backButton(page).click();
-  await codeView(shownPanel(page), 'middle-body').waitFor();
-  await createWorkspace(page);
-  const secondWorkspace = (await openWorkspaces(page))[1].id;
-  await clickFile(page, third);
-  await codeView(shownPanel(page), 'latest-body').waitFor();
-  const history = await storedHistory(page);
-  assert.ok(!('' in history));
-  assert.deepEqual(history[firstWorkspace], { entries: [first, second, { type: 'directory', machine, path: home }], index: 1 });
-  assert.deepEqual(history[secondWorkspace], { entries: [third], index: 0 });
-  await close();
-  ({ page, close } = await open());
-  collectErrors(page, errors);
-  const address = pathBox(page);
+  // The tab is the columns and nothing above them, which is the only child its root has.
+  assert.deepEqual(await filesPanels(page).locator('.file-browser').evaluate((element) => [...element.children].map((child) => child.className)), ['file-columns']);
   const directory = columnOf(page, home);
-  const firstFile = entry(directory, 'first.ts');
-  await filesPanels(page).nth(1).waitFor({ state: 'attached' });
-  assert.deepEqual(await storedHistory(page), history);
-  const workspaces = workspaceTabs(page);
-  await workspaces.first().click();
-  const onlyTab = filesTab(page);
-  assert.equal(await onlyTab.count(), 1);
-  await onlyTab.click();
-  await codeView(shownPanel(page), 'middle-body').waitFor();
-  const back = backButton(page);
-  const forward = forwardButton(page);
-  assert.equal(await address.inputValue(), middle);
-  assert.ok(await back.isEnabled());
-  assert.ok(await forward.isEnabled());
-  const historyPath = join(home, '.local/share/wangcai/data/files/history.json');
-  const mtimeBefore = statSync(historyPath, { bigint: true }).mtimeNs;
-  await refreshButton(page).click();
-  await codeView(shownPanel(page), 'middle-body').waitFor();
-  await onlyTab.click();
-  // Asking for the history is a read: the file it comes from is not written again for it.
-  await storedHistory(page);
-  assert.equal(statSync(historyPath, { bigint: true }).mtimeNs, mtimeBefore);
-  await forward.click();
-  await firstFile.waitFor();
-  await back.click();
-  await codeView(shownPanel(page), 'middle-body').waitFor();
-  await back.click();
-  await codeView(page, 'recovered').waitFor();
-  assert.equal(await address.inputValue(), code);
-  assert.ok(await back.isDisabled());
-  await goToPathEntry(page, home, 'first.ts');
-  assert.ok(await forward.isDisabled());
-  assert.deepEqual((await storedHistory(page))[firstWorkspace], {
-    entries: [first, { type: 'directory', machine, path: home }], index: 1,
-  });
-  await workspaces.last().click();
-  await onlyTab.click();
-  await codeView(shownPanel(page), 'latest-body').waitFor();
-  assert.ok(await back.isDisabled());
-  assert.ok(await forward.isDisabled());
-  await drawnCloseButtons(page).last().click();
-  const remaining = await storedHistory(page);
-  assert.ok(!(secondWorkspace in remaining));
-  assert.ok(firstWorkspace in remaining);
-  await openView(page, '文件');
-  await firstFile.waitFor();
-  assert.ok(await back.isDisabled());
-  assert.ok(await forward.isDisabled());
+  await entry(directory, 'sub/').click();
+  const subColumn = columnOf(page, join(home, 'sub'));
+  await subColumn.waitFor();
+  await entry(subColumn, 'inside.md').waitFor();
+  assert.equal(await columns(page).count(), 2, 'a directory below the workspace gets a column of its own');
+  // A file is the editor's: the click opens its tab, and this panel keeps the columns it had.
+  await entry(directory, 'sample.ts').click();
+  await editorTab(page).waitFor();
+  await codeView(shownPanel(page), 'const first = 1;').waitFor();
+  await waitForPath(page, join(home, 'sample.ts'));
+  assert.equal(await columns(page).count(), 2);
+  await page.screenshot({ path: 'test/output/screenshots/files-editor.png' });
+  // A file link lands in the editor too.
+  await clickFile(page, { type: 'file', machine, path: join(home, 'sub/inside.md') });
+  await codeView(shownPanel(page), '# Inside').waitFor();
+  // A directory link is shown here, and one the panel is not showing yet is what proves it: a level below `sub` puts a
+  // column of its own on screen.
+  mkdirSync(join(home, 'sub/deep'));
+  await clickFile(page, { type: 'directory', machine, path: join(home, 'sub/deep') });
+  const deepColumn = columnOf(page, join(home, 'sub/deep'));
+  await deepColumn.waitFor();
+  assert.equal(await columns(page).count(), 3, 'the link opened a column the panel was not showing');
+  // Nothing here reads a file, so a path that cannot be read is the editor's message to show; this panel stays on its
+  // columns.
+  writeFileSync(join(home, 'binary.bin'), Buffer.from([0, 1, 255, 2]));
+  await clickFile(page, { type: 'file', machine, path: join(home, 'binary.bin') });
+  await alert(page).filter({ hasText: '暂不支持二进制' }).waitFor();
+  assert.equal(await columns(page).count(), 3);
+  // The editor has the sidebar at this point, so it is given back before a column is clicked again.
+  await filesTab(page).click();
+  await entry(subColumn, 'empty/').click();
+  // The chain is now home, sub and empty, so the column of the sibling walked into before it is gone.
+  await deepColumn.waitFor({ state: 'detached' });
+  // An empty directory says so rather than showing nothing at all.
+  await emptyDirectory(page).waitFor();
+  await page.screenshot({ path: 'test/output/screenshots/files-columns.png' });
   assert.deepEqual(errors, []);
 }));

@@ -1,69 +1,8 @@
-.file-preview { height: 100%; display: flex; flex-direction: column; color: var(--wc-foreground); font-size: 12px; }
-.file-preview, .file-preview * { box-sizing: border-box; }
-.code-preview { flex: 1; min-height: 0; }
-.preview-header { flex-shrink: 0; display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 6px; border-bottom: 1px solid var(--wc-border); }
-/* Every icon button of the header answers to the same rules, which is why there is one class for them. */
-.preview-icon { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 24px; padding: 4px; color: var(--wc-muted); background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
-.preview-icon:hover:not(:disabled) { color: var(--wc-foreground); background: var(--wc-overlay); }
-.preview-icon:disabled { opacity: 0.35; cursor: default; }
-.preview-icon:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
-.preview-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
-.preview-address { flex: 1; min-width: 0; }
-.preview-path { width: 100%; height: 24px; padding: 0 6px; font: inherit; color: var(--wc-muted); background: transparent; border: 1px solid transparent; border-radius: 4px; }
-.preview-path:focus { color: var(--wc-foreground); background: var(--wc-overlay); border-color: var(--wc-accent); outline: none; }
-.file-preview .menu-backdrop { position: fixed; inset: 0; z-index: 5; -webkit-app-region: no-drag; }
-.preview-lsp-wrap { position: relative; flex-shrink: 0; }
-.preview-lsp-detail, .code-menu, .git-peek { background: var(--wc-background); border: 1px solid var(--wc-border); border-radius: 5px; box-shadow: 0 10px 28px #0006; }
-.preview-lsp-detail { position: absolute; top: calc(100% + 5px); right: 0; z-index: 6; display: grid; gap: 3px; min-width: 160px; max-width: 320px; padding: 6px 8px; font-size: 11px; line-height: 1.4; color: var(--wc-muted); }
-.preview-lsp-name { color: var(--wc-foreground); }
-.preview-lsp-detail span { overflow-wrap: anywhere; }
-.preview-lsp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--wc-muted); }
-.preview-lsp.open .preview-lsp-dot { background: var(--wc-accent); }
-.preview-lsp.closed .preview-lsp-dot, .preview-lsp.missing .preview-lsp-dot { background: var(--wc-yellow); }
-.code-menu { position: fixed; z-index: 6; min-width: 132px; padding: 4px; }
-.code-menu button { display: block; width: 100%; padding: 6px 8px; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 3px; text-align: left; cursor: pointer; }
-.code-menu button:hover { background: var(--wc-selection); }
-.code-menu button:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
-.file-message { padding: 16px; font-size: 12px; color: var(--wc-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-browser { height: 100%; display: flex; flex-direction: column; color: var(--wc-foreground); font-size: 12px; }
+.file-browser, .file-browser * { box-sizing: border-box; }
+.file-message { padding: 16px; color: var(--wc-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* The page and the search picker over it: the picker is placed against this box, so a preview that changes under it
-   does not take the picker along. It takes the lower half rather than covering it, so a page that follows the selection
-   centres its line in what is left of it, and the half it takes and the page leaves is one fraction both read. */
-.browser-view { position: relative; height: 100%; }
-.browser-view.searching { --search-half: 50%; }
-.browser-view.searching > .file-preview { height: var(--search-half); }
-
-.search-panel { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; flex-direction: column; height: var(--search-half); font-size: 12px; color: var(--wc-foreground); background: var(--wc-background); border-top: 1px solid var(--wc-border); box-shadow: 0 -8px 24px #0004; }
-.search-head { flex-shrink: 0; display: flex; align-items: center; gap: 6px; padding: 6px; border-bottom: 1px solid var(--wc-border); }
-.search-mode { flex-shrink: 0; color: var(--wc-muted); font-size: 11px; }
-.search-input { flex: 1; min-width: 0; height: 22px; padding: 0 4px; font: inherit; color: var(--wc-foreground); background: var(--wc-overlay); border: 1px solid var(--wc-accent); border-radius: 3px; outline: none; }
-.search-close { flex-shrink: 0; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; font: inherit; color: var(--wc-muted); background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
-.search-close:hover { color: var(--wc-foreground); background: var(--wc-overlay); }
-.search-close:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
-.search-note { flex-shrink: 0; padding: 2px 8px 4px; font-size: 11px; color: var(--wc-yellow); overflow-wrap: anywhere; }
-.search-list { flex: 1; min-height: 0; overflow: auto; }
-.search-row { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 3px 8px; font: inherit; color: inherit; background: transparent; border: 0; text-align: left; cursor: pointer; }
-.search-row:hover { background: var(--wc-overlay); }
-.search-row[aria-current] { background: var(--wc-selection); }
-.search-row:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
-.search-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search-row b { color: var(--wc-accent); font-weight: 600; }
-.search-detail { flex-shrink: 0; max-width: 60%; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--wc-muted); }
-
-/* VS Code's gutter: a bar for a changed line, a triangle where lines went away. */
-.git-line-added { border-left: 3px solid var(--wc-green); }
-.git-line-modified { border-left: 3px solid var(--wc-blue); }
-.git-line-deleted::before { content: ''; position: absolute; left: 3px; top: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid var(--wc-red); }
-
-/* A menu opens over the page this covers, so the peek sits under menus and their backdrop. */
-.git-peek { position: fixed; z-index: 4; display: flex; flex-direction: column; overflow: hidden; }
-.git-peek-head { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 8px; color: var(--wc-muted); font-size: 11px; border-bottom: 1px solid var(--wc-border); }
-.git-peek-head button { flex-shrink: 0; width: 18px; height: 18px; margin-left: auto; padding: 0; font: inherit; color: inherit; background: transparent; border: 0; border-radius: 3px; cursor: pointer; }
-.git-peek-head button:hover { color: var(--wc-foreground); background: var(--wc-overlay); }
-.git-peek-head button:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
-.git-peek-body { min-height: 0; }
-
-.file-columns { flex: 1; min-height: 0; display: flex; overflow: hidden; font-size: 12px; }
+.file-columns { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 .file-column { flex: 0 0 auto; width: max-content; min-width: 72px; max-width: 220px; overflow: auto; scrollbar-width: none; border-right: 1px solid var(--wc-border); }
 .file-column::-webkit-scrollbar { display: none; }
 .file-column button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
