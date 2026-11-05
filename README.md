@@ -24,7 +24,7 @@ tabs: [
 
 ## 键
 
-`<leader>ff`（默认 `<Space>ff`）把本视图调到前面。
+`<leader>f`（默认 `<C-Space>f`）把本视图调到前面。
 
 ## 标签页
 
