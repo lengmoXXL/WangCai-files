@@ -3,7 +3,7 @@ import type { MachineConnection } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { machineKey, type FileClick, type GitLetter, type GitStatus } from './shared';
 
-export const keys = { '<leader>f': { global: true, desc: '打开文件视图', event: 'core:show-view', data: { plugin: 'files' } } };
+export const keys = { '<leader>f': { global: true, insert: true, desc: '打开文件视图', event: 'core:show-view', data: { plugin: 'files' } } };
 
 // Fields this plugin takes from init.ts.
 export const config = {
