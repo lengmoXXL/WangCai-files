@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DirectoryEntry, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { type FileClick, type Font, type GitStatus, type Settings } from './shared';
@@ -30,6 +30,13 @@ const watch = (context: UiContext, machine: FileClick['machine'], holder: string
   return () => { off(); void context.ui.request('watch', { holder, machine, paths: [] }).catch(() => undefined); };
 };
 
+// The directory above a path, which is the root for a path directly under it.
+const parentOf = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
+// The last name of a path, which is what sits under the path above it.
+const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
+// A child's path, with the root's own slash left out of the join.
+const childOf = (base: string, name: string) => `${base === '/' ? '' : base}/${name}`;
+
 // The directory chain from what the path and the workspace have in common down to the path itself: the picker gives
 // every level a column of its own.
 function chain(path: string, workspace: string) {
@@ -38,7 +45,7 @@ function chain(path: string, workspace: string) {
   for (; ; ) {
     directories.push(current);
     if (current === '/' || workspace === current || workspace.startsWith(`${current}/`)) return directories.reverse();
-    current = current.slice(0, current.lastIndexOf('/')) || '/';
+    current = parentOf(current);
   }
 }
 
@@ -49,9 +56,9 @@ const gitRanks: Record<string, number> = { '!': 0, D: 1, M: 2, T: 3, A: 4, R: 5,
 function markFolders({ root, states }: GitStatus) {
   const marks = new Map<string, string>();
   for (const [path, letter] of Object.entries(states)) {
-    const file = `${root === '/' ? '' : root}/${path}`;
+    const file = childOf(root, path);
     marks.set(file, letter);
-    for (let directory = file.slice(0, file.lastIndexOf('/')) || '/'; directory.length > root.length; directory = directory.slice(0, directory.lastIndexOf('/')) || '/') {
+    for (let directory = parentOf(file); directory.length > root.length; directory = parentOf(directory)) {
       const held = marks.get(directory);
       if (!held || gitRanks[letter] < gitRanks[held]) marks.set(directory, letter);
     }
@@ -71,6 +78,12 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   // Marks move with anything on disk, a column or the repository, so their read counts the changes this watch reports.
   const [changes, setChanges] = useState(0);
   const [git, setGit] = useState<{ workspace: string; root: string; marks: Map<string, string> }>();
+  const [cursor, setCursor] = useState<{ column: string; name: string }>();
+  // The columns the mouse widened, by the width the drag leaves them.
+  const [widths, setWidths] = useState(new Map<string, number>());
+  // The query the search box holds; `undefined` is the box closed.
+  const [search, setSearch] = useState<string>();
+  const drag = useRef<{ column: string; left: number; width: number }>(undefined);
   const pane = useRef<HTMLDivElement>(null);
   const directories = chain(directory.path, workspace);
   // `entries` and `directories` are left out of the dependencies on purpose: they only say which columns this pass reads,
@@ -107,7 +120,7 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   }, [context, directory, workspace, changes]);
   // The watch follows the whole chain, columns and the repository once its root is known, so a change on disk reaches
   // the column it belongs to and the marks.
-  const repository = git?.root ? `${git.root}/.git` : '';
+  const repository = git?.root ? childOf(git.root, '.git') : '';
   useEffect(() => watch(context, directory.machine, holder, repository ? [...directories, repository] : directories, (path) => {
     setChanges((count) => count + 1);
     // The repository is here for the marks alone, and `stale` holds the columns.
@@ -116,33 +129,157 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   // The columns a chain dropped are offered their room again when the chain changes, since another chain packs
   // differently.
   useEffect(() => setDropped(0), [directory, workspace]);
+  // The deepest column stays on screen whatever the pane had to drop.
+  const deepestIndex = directories.length - 1;
+  const widened = widths.size > 0;
   // A column is as wide as its own entries, so how much of the chain fits is only known once they are in: the pane
   // drops the shallowest column until the path's own column fits, leaving the workspace leftmost whenever it can.
   useLayoutEffect(() => {
     const element = pane.current;
-    if (element && element.clientWidth && element.scrollWidth > element.clientWidth && dropped < directories.length - 1) setDropped(dropped + 1);
-  }, [directory, entries, workspace, dropped, directories.length]);
+    if (widened || !element || !element.clientWidth || element.scrollWidth <= element.clientWidth || dropped >= deepestIndex) return;
+    setDropped(dropped + 1);
+  }, [directory, entries, workspace, dropped, deepestIndex, widened]);
+  const first = Math.min(dropped, deepestIndex);
+  const shown = directories.slice(first);
+  const deepest = directories[deepestIndex];
+  // The entries a column lists, which is nothing while it is still being read.
+  const listingOf = (column: string) => entries.get(column) ?? [];
+  // Every entry the columns on screen list, which is what the search box looks through.
+  const listed = shown.flatMap((column) => listingOf(column).map((item) => ({ column, name: item.name })));
+  const matchesOf = (query: string) => listed.filter(({ name }) => name.toLowerCase().includes(query.trim().toLowerCase()));
+  const matches = search === undefined ? [] : matchesOf(search);
+  // The row the cursor holds.
+  const holds = (column: string, name: string) => cursor?.column === column && cursor.name === name;
+  // Where the cursor sits among the matches, read as the first when it is not on one.
+  const matchAt = Math.max(0, matches.findIndex(({ column, name }) => holds(column, name)));
+  // The cursor stays in the columns on screen: one that left gives it up, and the deepest column takes its first entry
+  // when none of them holds it. An open search box picks its own entry, so this leaves the cursor to it.
+  useEffect(() => {
+    if (search !== undefined || (cursor && shown.includes(cursor.column))) return;
+    const listing = listingOf(deepest);
+    if (listing.length) setCursor({ column: deepest, name: listing[0].name });
+  }, [cursor, directory, dropped, entries, search, workspace]);
+  // A column can be longer than the pane, so the cursor is scrolled into view whenever the keys move it.
+  useLayoutEffect(() => {
+    pane.current?.querySelector('[data-cursor]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [cursor]);
+  // An index kept inside a list of `length` items, which is how a step stops at either end.
+  const within = (index: number, length: number) => Math.min(length - 1, Math.max(0, index));
+  const step = (delta: number) => {
+    if (!cursor) return;
+    const names = listingOf(cursor.column).map((item) => item.name);
+    if (!names.length) return;
+    setCursor({ column: cursor.column, name: names[within(names.indexOf(cursor.name) + delta, names.length)] });
+  };
+  // What the page is asked to show, always on this tab's machine.
+  const showPath = (type: FileClick['type'], path: string) => navigate({ type, machine: directory.machine, path });
+  const pick = (column: string, item: DirectoryEntry) => {
+    const path = childOf(column, item.name);
+    setSearch(undefined);
+    // The chain follows a directory down and the cursor follows the chain, while a file is handed on and the cursor stays.
+    if (item.isDirectory) setCursor(undefined);
+    showPath(item.isDirectory ? 'directory' : 'file', path);
+  };
+  const into = () => {
+    if (!cursor) return;
+    const item = listingOf(cursor.column).find((one) => one.name === cursor.name);
+    if (item) pick(cursor.column, item);
+  };
+  // A parent is where `h` goes, never above the workspace, which is where the chain starts.
+  const out = () => {
+    const path = directory.path;
+    const parent = parentOf(path);
+    if (parent === path || path === workspace) return;
+    setCursor({ column: parent, name: nameOf(path) });
+    showPath('directory', parent);
+  };
+  // A query picks its first match as it is typed, so the box and the columns agree on what is held.
+  const type = (query: string) => {
+    setSearch(query);
+    const [found] = matchesOf(query);
+    if (found) setCursor(found);
+  };
+  const searchStep = (delta: number) => {
+    const next = matches[within(matchAt + delta, matches.length)];
+    if (next) setCursor(next);
+  };
+  // The keys belong to the panel that holds the focus: the shell hands a tab its keys by focusing the panel, and a click
+  // on a column focuses something inside it. The listener is read after every render, so a press always moves over the
+  // columns on screen rather than the ones a mount captured.
+  useEffect(() => {
+    const panel = pane.current?.closest<HTMLElement>('.sidebar-panel');
+    if (!panel) return;
+    const closeSearch = () => {
+      setSearch(undefined);
+      // The keys go back to the panel, since the box that held the focus unmounts with the press.
+      panel.focus();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.target instanceof Node) || !panel.contains(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+      // While the box is open its own letters are the query, and only the keys that move the cursor or leave it are read.
+      if (search !== undefined) {
+        if (event.key === 'Escape' || event.key === 'Enter') { event.preventDefault(); closeSearch(); }
+        else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); searchStep(event.key === 'ArrowDown' ? 1 : -1); }
+        return;
+      }
+      const action = event.key === 'j' || event.key === 'ArrowDown' ? () => step(1)
+        : event.key === 'k' || event.key === 'ArrowUp' ? () => step(-1)
+          : event.key === 'l' || event.key === 'ArrowRight' || event.key === 'Enter' ? into
+            : event.key === 'h' || event.key === 'ArrowLeft' ? out
+              : event.key === '/' ? () => setSearch('')
+                : undefined;
+      if (!action) return;
+      event.preventDefault();
+      action();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+  const grab = (column: string) => (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const box = event.currentTarget.parentElement!.getBoundingClientRect();
+    drag.current = { column, left: event.clientX, width: box.width };
+  };
+  const widen = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const held = drag.current;
+    if (!held) return;
+    // The narrowest a column may get is CSS's, which clamps what the drag stores.
+    setWidths((current) => new Map(current).set(held.column, Math.round(held.width + event.clientX - held.left)));
+  };
+  const release = () => {
+    drag.current = undefined;
+  };
   if (error) return <div className="file-message" role="alert">{error}</div>;
-  const first = Math.min(dropped, directories.length - 1);
-  return <div className="file-columns" ref={pane}>
-    {directories.slice(first).map((column, index) => {
-      const listing = entries.get(column);
-      // The entry this column holds open, which is the level below it; the last column holds none.
-      const opened = directories[index + first + 1] ?? '';
-      return <nav key={column} className="file-column" aria-label={column}>
-        {listing?.map((entry) => {
-          const path = `${column === '/' ? '' : column}/${entry.name}`;
-          const mark = git?.workspace === workspace ? git.marks.get(path) : undefined;
-          const badge = mark && !entry.isDirectory ? mark : undefined;
-          return <button key={entry.name} title={badge ? `${entry.name} · ${gitLabels[badge]}` : entry.name} data-git={mark} aria-current={path === opened || undefined} onClick={() => navigate({ type: entry.isDirectory ? 'directory' : 'file', machine: directory.machine, path })}>
-            <svg className="file-icon" data-kind={entry.isDirectory ? 'folder' : 'file'} aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4">
-              {entry.isDirectory ? <path d="M2 5h6l2 2h8v10H2z" /> : <path d="M5 2h6l4 4v12H5z M11 2v5h4 M8 11h4 M8 14h4" />}
-            </svg><span className="file-name">{entry.name}{entry.isDirectory ? '/' : ''}</span>{badge && <span className="file-git" aria-hidden="true">{badge}</span>}
-          </button>;
-        })}
-        {listing?.length === 0 && <div className="file-message">空目录</div>}
-      </nav>;
-    })}
+  return <div className="file-columns">
+    {search !== undefined && <div className="file-search">
+      <input aria-label="搜索" placeholder="搜索" spellCheck={false} autoFocus value={search} onChange={(event) => type(event.target.value)} />
+      <span className="file-search-count">{matches.length ? `${matchAt + 1}/${matches.length}` : '无匹配'}</span>
+    </div>}
+    <div className="file-column-row" ref={pane} data-resized={widened ? '' : undefined} onPointerDown={() => setSearch(undefined)}>
+      {shown.map((column, index) => {
+        const listing = entries.get(column);
+        // The entry this column holds open, which is the level below it; the last column holds none.
+        const opened = shown[index + 1] ?? '';
+        const width = widths.get(column);
+        return <div key={column} className="file-column" style={width === undefined ? undefined : { width, maxWidth: 'none' }}>
+          <nav className="file-list" aria-label={column}>
+            {listing?.map((entry) => {
+              const path = childOf(column, entry.name);
+              const mark = git?.workspace === workspace ? git.marks.get(path) : undefined;
+              const badge = mark && !entry.isDirectory ? mark : undefined;
+              return <button key={entry.name} title={badge ? `${entry.name} · ${gitLabels[badge]}` : entry.name} data-git={mark} data-cursor={holds(column, entry.name) ? '' : undefined} aria-current={path === opened || undefined} onClick={() => pick(column, entry)}>
+                <svg className="file-icon" data-kind={entry.isDirectory ? 'folder' : 'file'} aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4">
+                  {entry.isDirectory ? <path d="M2 5h6l2 2h8v10H2z" /> : <path d="M5 2h6l4 4v12H5z M11 2v5h4 M8 11h4 M8 14h4" />}
+                </svg><span className="file-name">{entry.name}{entry.isDirectory ? '/' : ''}</span>{badge && <span className="file-git" aria-hidden="true">{badge}</span>}
+              </button>;
+            })}
+            {listing?.length === 0 && <div className="file-message">空目录</div>}
+          </nav>
+          <div className="file-resize" role="separator" aria-orientation="vertical" aria-label={`调整 ${column} 的宽度`} onPointerDown={grab(column)} onPointerMove={widen} onPointerUp={release} onPointerCancel={release} />
+        </div>;
+      })}
+    </div>
   </div>;
 }
 

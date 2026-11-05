@@ -1,19 +1,33 @@
 .file-browser { height: 100%; display: flex; flex-direction: column; color: var(--wc-foreground); font-size: 12px; }
 .file-browser, .file-browser * { box-sizing: border-box; }
 .file-message { padding: 16px; color: var(--wc-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-columns { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
-.file-columns { flex: 1; min-height: 0; display: flex; overflow: hidden; }
-.file-column { flex: 0 0 auto; width: max-content; min-width: 72px; max-width: 220px; overflow: auto; scrollbar-width: none; border-right: 1px solid var(--wc-border); }
-.file-column::-webkit-scrollbar { display: none; }
-.file-column button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
-.file-column button:hover { background: var(--wc-overlay); }
-.file-column button[aria-current] { background: var(--wc-selection); }
-.file-column button:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
-.file-column button .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-git { flex-shrink: 0; margin-left: auto; padding-left: 8px; font-size: 11px; font-weight: 600; }
+.file-column-row { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+/* A widened column takes its room from the pane, which then scrolls sideways instead of dropping a column. */
+.file-column-row[data-resized] { overflow-x: auto; }
+.file-column { position: relative; flex: 0 0 auto; display: flex; width: max-content; min-width: 72px; max-width: 220px; border-right: 1px solid var(--wc-border); }
+.file-resize { position: absolute; top: 0; right: -3px; bottom: 0; width: 6px; cursor: col-resize; }
+/* The bar is thinner than the grab area, so the edge stays easy to catch. */
+.file-resize::after { content: ''; position: absolute; top: 0; right: 2px; bottom: 0; width: 2px; }
+.file-resize:hover::after, .file-resize:active::after { background: var(--wc-accent); }
 
+.file-list { flex: 1; min-width: 0; overflow: auto; scrollbar-width: none; }
+.file-list::-webkit-scrollbar { display: none; }
+.file-list button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.file-list button:hover { background: var(--wc-overlay); }
+.file-list button[aria-current] { background: var(--wc-selection); }
+.file-list button[data-cursor] { outline: 1px solid var(--wc-accent); outline-offset: -1px; }
+.file-list button:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
+.file-list button .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--wc-muted); }
 .file-icon[data-kind=folder] { color: var(--wc-yellow); }
-.file-column button[data-git=M], .file-column button[data-git=T] { color: var(--wc-yellow); }
-.file-column button[data-git=A], .file-column button[data-git=R], .file-column button[data-git=C], .file-column button[data-git=U] { color: var(--wc-green); }
-.file-column button[data-git=D], .file-column button[data-git='!'] { color: var(--wc-red); }
+.file-git { flex-shrink: 0; margin-left: auto; padding-left: 8px; font-size: 11px; font-weight: 600; }
+.file-list button[data-git=M], .file-list button[data-git=T] { color: var(--wc-yellow); }
+.file-list button[data-git=A], .file-list button[data-git=R], .file-list button[data-git=C], .file-list button[data-git=U] { color: var(--wc-green); }
+.file-list button[data-git=D], .file-list button[data-git='!'] { color: var(--wc-red); }
+
+/* The box pops over the columns, so they keep the room they had. */
+.file-search { position: absolute; top: 4px; right: 8px; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 2px 6px; border: 1px solid var(--wc-border); border-radius: 4px; background: var(--wc-surface); }
+.file-search input { width: 148px; padding: 2px 0; border: 0; background: transparent; color: inherit; font: inherit; outline: none; }
+.file-search-count { color: var(--wc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }

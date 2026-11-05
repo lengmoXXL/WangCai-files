@@ -4,7 +4,7 @@ const { execFileSync } = require('node:child_process');
 const { mkdirSync, rmSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { columnOf, entry, lists, mark, openFilesWorkspace } = require('./files-ui.cjs');
+const { columnOf, entry, label, lists, mark, openFilesWorkspace } = require('./files-ui.cjs');
 
 test('the columns mark git changes the way VS Code does', { timeout: 180000 }, () => withWindow('wangcai-git', lists, async ({ home, page, errors }) => {
   const git = (...args) => execFileSync('git', args, { cwd: home, encoding: 'utf8' });
@@ -38,7 +38,7 @@ test('the columns mark git changes the way VS Code does', { timeout: 180000 }, (
     const one = entry(column, name);
     return (await one.count()) ? one.getAttribute('data-git') : null;
   };
-  const colour = (column, name) => entry(column, name).locator('.file-name').evaluate((element) => getComputedStyle(element).color);
+  const colour = (column, name) => label(entry(column, name)).evaluate((element) => getComputedStyle(element).color);
   const badge = (column, name) => entry(column, name).locator('.file-git');
   assert.deepEqual([await mark(directory, 'kept.txt'), await colour(directory, 'kept.txt')], ['M', 'rgb(228, 197, 144)']);
   assert.deepEqual([await mark(directory, 'fresh.txt'), await colour(directory, 'fresh.txt')], ['U', 'rgb(155, 199, 188)']);

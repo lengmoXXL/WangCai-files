@@ -41,6 +41,35 @@ const codeView = (scope, text) => editorLines(scope).filter({ hasText: text });
 const pathBox = (scope) => scope.getByRole('textbox', { name: '路径', exact: true });
 const waitForPath = (scope, path) => until(async () => (await pathBox(scope).first().inputValue()) === path);
 
+// The row the keys stand on.
+const cursor = (page) => page.locator('.file-list button[data-cursor]');
+
+// The label of a row.
+const label = (row) => row.locator('.file-name');
+
+// What the cursor holds: the name it shows and the column that lists it.
+const held = async (page) => [
+  await label(cursor(page)).innerText(),
+  await cursor(page).evaluate((element) => element.closest('nav').getAttribute('aria-label')),
+];
+
+// The box `/` opens over the columns, its field, and the count it shows.
+const searchBox = (page) => page.locator('.file-search');
+const searchField = (page) => searchBox(page).getByRole('textbox', { name: '搜索', exact: true });
+const searchCount = (page) => searchBox(page).locator('.file-search-count').innerText();
+
+// The row of columns, which is the pane a widened column scrolls in.
+const columnRow = (page) => page.locator('.file-column-row');
+
+// The names one column lists, in the order it lists them.
+const names = (column) => label(column).evaluateAll((elements) => elements.map((element) => element.innerText));
+
+// The handle on a column's right edge, which the mouse drags to widen it.
+const resizeHandle = (column) => column.locator('.file-resize');
+
+// How wide a column is drawn, which that drag changes.
+const width = (column) => column.evaluate((element) => element.getBoundingClientRect().width);
+
 // An entry of a column, waited for by the mark it carries rather than by the listing it came with.
 const mark = async (column, name) => {
   let letter;
@@ -64,5 +93,15 @@ module.exports = {
   openFilesWorkspace,
   codeView,
   waitForPath,
+  cursor,
+  label,
+  held,
+  searchBox,
+  searchField,
+  searchCount,
+  columnRow,
+  names,
+  resizeHandle,
+  width,
   mark,
 };
