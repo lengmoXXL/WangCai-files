@@ -1,4 +1,32 @@
-const { createWorkspace, openView, until } = require('@lengmoxxl/wangcai-testkit');
+const { until } = require('@lengmoxxl/wangcai-testkit');
+
+// What a case does to the window's own chrome.
+//
+// The menu that makes a workspace is the space under the rows: the rows have to end above the list's bottom edge, so the
+// click lands on the list rather than on a row.
+const openWorkspaceMenu = async (page) => {
+  const list = page.locator('.workspaces');
+  const box = await list.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height - 4, { button: 'right' });
+};
+
+/** Waits until the terminal in front draws that text, which it does once the shell has written it. */
+const terminalShows = (page, text) => page.locator('.terminal-pane.active .xterm-screen').filter({ hasText: text }).waitFor();
+
+/** Opens a local workspace, and waits for the shell its pane draws a moment after the workspace appears. */
+const createWorkspace = async (page) => {
+  await openWorkspaceMenu(page);
+  await page.locator('#workspace-row-menu').getByRole('menuitem', { name: '新建 本机', exact: true }).click();
+  await terminalShows(page, /\S/);
+};
+
+/** Opens a view in the sidebar, showing the sidebar first when it is off screen. */
+const openView = async (page, name) => {
+  const newTab = page.getByRole('button', { name: '新建侧栏标签页' });
+  if (!(await newTab.isVisible())) await page.getByRole('button', { name: '切换右侧栏' }).click();
+  await newTab.click();
+  await page.locator('#view-menu').getByRole('button', { name, exact: true }).click();
+};
 
 // The machine the window works on, which is the one a case's paths are read from.
 const machine = { id: 'local', name: '本机' };
