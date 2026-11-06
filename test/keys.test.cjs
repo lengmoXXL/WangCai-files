@@ -5,7 +5,7 @@ const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
 const { columnOf, columnRow, columns, cursor, entry, held, lists, names, openFilesWorkspace, resizeHandle, searchBox, searchCount, searchField, shownPanel, width } = require('./files-ui.cjs');
 
-test('the keys walk the columns and the search jumps across them, and a drag widens a column', { timeout: 180000 }, () => withWindow('wangcai-keys', lists, async ({ home, page, errors }) => {
+test('the keys walk the columns, the search filters the level being picked from, and a drag widens a column', { timeout: 180000 }, () => withWindow('wangcai-keys', lists, async ({ home, page, errors }) => {
   mkdirSync(join(home, 'sub/deep'), { recursive: true });
   writeFileSync(join(home, 'sub/inside.md'), '# Inside\n');
   writeFileSync(join(home, 'alpha.md'), 'a\n');
@@ -18,9 +18,10 @@ test('the keys walk the columns and the search jumps across them, and a drag wid
     await searchField(page).waitFor();
     await page.keyboard.type(query);
   };
+  const boxGone = () => searchBox(page).waitFor({ state: 'detached' });
   const closeSearch = async () => {
     await page.keyboard.press('Enter');
-    await searchBox(page).waitFor({ state: 'detached' });
+    await boxGone();
   };
   const enter = async (path) => {
     await page.keyboard.press('l');
@@ -36,14 +37,34 @@ test('the keys walk the columns and the search jumps across them, and a drag wid
   assert.deepEqual(await held(page), [listed[1], home]);
   await page.keyboard.press('k');
   assert.deepEqual(await held(page), [listed[0], home]);
+  await page.keyboard.press('G');
+  assert.deepEqual(await held(page), [listed.at(-1), home]);
+  await page.keyboard.press('g');
+  await page.keyboard.press('g');
+  assert.deepEqual(await held(page), [listed[0], home]);
+  const pane = columnRow(page);
+  const bounds = await pane.boundingBox();
+  const corner = { x: bounds.x + bounds.width - 10, y: bounds.y + bounds.height - 10 };
+  assert.ok(await pane.evaluate((element, { x, y }) => element === document.elementFromPoint(x, y), corner), 'the click lands on the pane, clear of the entries');
+  // A click drops a waiting `g`, so the `g` after it waits again instead of landing anywhere.
+  await page.keyboard.press('G');
+  await page.keyboard.press('g');
+  await page.mouse.click(corner.x, corner.y);
+  await page.keyboard.press('g');
+  assert.deepEqual(await held(page), [listed.at(-1), home]);
+  await page.keyboard.press('g');
+  assert.deepEqual(await held(page), [listed[0], home]);
   // `/` opens a box over the top right of the panel, and what it holds picks its match as it is typed.
   await search('sub');
   const box = await searchBox(page).boundingBox();
-  const row = await columnRow(page).boundingBox();
   const panel = await shownPanel(page).boundingBox();
-  assert.equal(Math.round(row.y), Math.round(panel.y), 'the columns still start at the panel top');
+  const drawn = await columns(page).evaluateAll((all) => all.map((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: Math.round(rect.top), middle: rect.top + rect.height / 2 };
+  }));
+  assert.ok(drawn.every(({ top }) => top === Math.round(panel.y)), 'the columns still start at the panel top');
   assert.ok(box.x > panel.x + panel.width / 2 && box.x + box.width <= panel.x + panel.width, 'the box is over the right of the columns');
-  assert.ok(box.y - row.y < row.height / 2, 'the box is over the top of the columns');
+  assert.ok(drawn.every(({ middle }) => box.y < middle), 'the box is over the top of the columns');
   await until(async () => (await held(page))[0] === 'sub/');
   await closeSearch();
   // `l` goes down a level and the cursor goes with it, while `h` comes back up onto the directory it left.
@@ -53,19 +74,24 @@ test('the keys walk the columns and the search jumps across them, and a drag wid
   await page.keyboard.press('h');
   await sub.waitFor({ state: 'detached' });
   assert.deepEqual(await held(page), ['sub/', home]);
-  // A query looks through every column on screen, and the arrows move the cursor from one column to the next.
+  // A query looks through the deepest column alone: `alpha.md` sits a column up, so it is not a hit.
   await enter(join(home, 'sub'));
-  await search('md');
-  await until(async () => (await searchCount(page)) === '1/3');
-  assert.deepEqual(await held(page), ['alpha.md', home]);
+  await search('alpha');
+  await until(async () => (await searchCount(page)) === '无匹配');
+  await closeSearch();
+  assert.deepEqual(await held(page), ['deep/', join(home, 'sub')], 'a query without a hit leaves the cursor alone');
+  // `e` sits in both entries, so the arrows walk this level's two matches.
+  await search('e');
+  await until(async () => (await searchCount(page)) === '1/2');
+  assert.deepEqual(await held(page), ['deep/', join(home, 'sub')]);
   await page.keyboard.press('ArrowDown');
-  await until(async () => (await searchCount(page)) === '2/3');
-  assert.deepEqual(await held(page), ['omega.md', home]);
-  await page.keyboard.press('ArrowDown');
-  await until(async () => (await searchCount(page)) === '3/3');
-  assert.deepEqual(await held(page), ['inside.md', join(home, 'sub')]);
+  await until(async () => (await searchCount(page)) === '2/2');
   await closeSearch();
   assert.deepEqual(await held(page), ['inside.md', join(home, 'sub')], 'closing the box leaves the cursor where the arrows put it');
+  // A click closes the box, because the pointer goes down on the pane before the entry is clicked.
+  await search('md');
+  await entry(directory, 'sub/').click();
+  await boxGone();
   // A column is widened from the edge it shares with the next one, and keeps the width the drag leaves it.
   const first = columns(page).first();
   const before = await width(first);
@@ -77,7 +103,7 @@ test('the keys walk the columns and the search jumps across them, and a drag wid
   await page.mouse.up();
   const after = await width(first);
   assert.ok(after > before + 100, `the column widened: ${before} -> ${after}`);
-  assert.equal(await columnRow(page).getAttribute('data-resized'), '', 'the pane is marked as widened');
+  assert.equal(await pane.getAttribute('data-resized'), '', 'the pane is marked as widened');
   assert.equal(await columns(page).count(), 2, 'no column was dropped');
   await page.screenshot({ path: 'test/output/screenshots/keys-search.png' });
   assert.deepEqual(errors, []);

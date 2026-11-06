@@ -85,6 +85,7 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   const [search, setSearch] = useState<string>();
   const drag = useRef<{ column: string; left: number; width: number }>(undefined);
   const pane = useRef<HTMLDivElement>(null);
+  const awaitingG = useRef(false);
   const directories = chain(directory.path, workspace);
   // `entries` and `directories` are left out of the dependencies on purpose: they only say which columns this pass reads,
   // and what comes back is stored in them, so depending on them would read a column again for every column read.
@@ -144,38 +145,38 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   const deepest = directories[deepestIndex];
   // The entries a column lists, which is nothing while it is still being read.
   const listingOf = (column: string) => entries.get(column) ?? [];
-  // Every entry the columns on screen list, which is what the search box looks through.
-  const listed = shown.flatMap((column) => listingOf(column).map((item) => ({ column, name: item.name })));
-  const matchesOf = (query: string) => listed.filter(({ name }) => name.toLowerCase().includes(query.trim().toLowerCase()));
+  const namesOf = (column: string) => listingOf(column).map((item) => item.name);
+  // The search looks through the deepest column, the level being picked from.
+  const level = namesOf(deepest);
+  const matchesOf = (query: string) => level.filter((name) => name.toLowerCase().includes(query.trim().toLowerCase()));
   const matches = search === undefined ? [] : matchesOf(search);
-  // The row the cursor holds.
   const holds = (column: string, name: string) => cursor?.column === column && cursor.name === name;
   // Where the cursor sits among the matches, read as the first when it is not on one.
-  const matchAt = Math.max(0, matches.findIndex(({ column, name }) => holds(column, name)));
+  const matchAt = Math.max(0, matches.findIndex((name) => holds(deepest, name)));
+  const seat = (name: string) => setCursor({ column: deepest, name });
   // The cursor stays in the columns on screen: one that left gives it up, and the deepest column takes its first entry
   // when none of them holds it. An open search box picks its own entry, so this leaves the cursor to it.
   useEffect(() => {
     if (search !== undefined || (cursor && shown.includes(cursor.column))) return;
-    const listing = listingOf(deepest);
-    if (listing.length) setCursor({ column: deepest, name: listing[0].name });
+    if (level.length) seat(level[0]);
   }, [cursor, directory, dropped, entries, search, workspace]);
   // A column can be longer than the pane, so the cursor is scrolled into view whenever the keys move it.
   useLayoutEffect(() => {
     pane.current?.querySelector('[data-cursor]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [cursor]);
-  // An index kept inside a list of `length` items, which is how a step stops at either end.
+  // A move stops at either end of the list.
   const within = (index: number, length: number) => Math.min(length - 1, Math.max(0, index));
-  const step = (delta: number) => {
+  // `land` answers the row the cursor lands on.
+  const moveTo = (land: (at: number, count: number) => number) => {
     if (!cursor) return;
-    const names = listingOf(cursor.column).map((item) => item.name);
+    const names = namesOf(cursor.column);
     if (!names.length) return;
-    setCursor({ column: cursor.column, name: names[within(names.indexOf(cursor.name) + delta, names.length)] });
+    setCursor({ column: cursor.column, name: names[within(land(names.indexOf(cursor.name), names.length), names.length)] });
   };
   // What the page is asked to show, always on this tab's machine.
   const showPath = (type: FileClick['type'], path: string) => navigate({ type, machine: directory.machine, path });
   const pick = (column: string, item: DirectoryEntry) => {
     const path = childOf(column, item.name);
-    setSearch(undefined);
     // The chain follows a directory down and the cursor follows the chain, while a file is handed on and the cursor stays.
     if (item.isDirectory) setCursor(undefined);
     showPath(item.isDirectory ? 'directory' : 'file', path);
@@ -197,11 +198,11 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   const type = (query: string) => {
     setSearch(query);
     const [found] = matchesOf(query);
-    if (found) setCursor(found);
+    if (found) seat(found);
   };
   const searchStep = (delta: number) => {
     const next = matches[within(matchAt + delta, matches.length)];
-    if (next) setCursor(next);
+    if (next) seat(next);
   };
   // The keys belong to the panel that holds the focus: the shell hands a tab its keys by focusing the panel, and a click
   // on a column focuses something inside it. The listener is read after every render, so a press always moves over the
@@ -222,12 +223,21 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
         else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); searchStep(event.key === 'ArrowDown' ? 1 : -1); }
         return;
       }
-      const action = event.key === 'j' || event.key === 'ArrowDown' ? () => step(1)
-        : event.key === 'k' || event.key === 'ArrowUp' ? () => step(-1)
-          : event.key === 'l' || event.key === 'ArrowRight' || event.key === 'Enter' ? into
-            : event.key === 'h' || event.key === 'ArrowLeft' ? out
-              : event.key === '/' ? () => setSearch('')
-                : undefined;
+      // `gg` is the one press that waits for a second: the next key it reads either completes it or drops it.
+      if (event.key === 'g') {
+        event.preventDefault();
+        if (awaitingG.current) moveTo(() => 0);
+        awaitingG.current = !awaitingG.current;
+        return;
+      }
+      awaitingG.current = false;
+      const action = event.key === 'j' || event.key === 'ArrowDown' ? () => moveTo((at) => at + 1)
+        : event.key === 'k' || event.key === 'ArrowUp' ? () => moveTo((at) => at - 1)
+          : event.key === 'G' ? () => moveTo((at, count) => count - 1)
+            : event.key === 'l' || event.key === 'ArrowRight' || event.key === 'Enter' ? into
+              : event.key === 'h' || event.key === 'ArrowLeft' ? out
+                : event.key === '/' ? () => setSearch('')
+                  : undefined;
       if (!action) return;
       event.preventDefault();
       action();
@@ -235,6 +245,11 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
+  // A click anywhere on the pane drops the `g` that waits for its second press.
+  const clickPane = () => {
+    awaitingG.current = false;
+    setSearch(undefined);
+  };
   const grab = (column: string) => (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -253,10 +268,10 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   if (error) return <div className="file-message" role="alert">{error}</div>;
   return <div className="file-columns">
     {search !== undefined && <div className="file-search">
-      <input aria-label="搜索" placeholder="搜索" spellCheck={false} autoFocus value={search} onChange={(event) => type(event.target.value)} />
+      <input aria-label="搜索" placeholder="搜索本层" spellCheck={false} autoFocus value={search} onChange={(event) => type(event.target.value)} />
       <span className="file-search-count">{matches.length ? `${matchAt + 1}/${matches.length}` : '无匹配'}</span>
     </div>}
-    <div className="file-column-row" ref={pane} data-resized={widened ? '' : undefined} onPointerDown={() => setSearch(undefined)}>
+    <div className="file-column-row" ref={pane} data-resized={widened ? '' : undefined} onPointerDown={clickPane}>
       {shown.map((column, index) => {
         const listing = entries.get(column);
         // The entry this column holds open, which is the level below it; the last column holds none.
