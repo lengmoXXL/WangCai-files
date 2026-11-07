@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DirectoryEntry, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
+import { bindKeys } from '@lengmoxxl/sdk/keys';
 import { type FileClick, type Font, type GitStatus, type Settings } from './shared';
 import './style.css';
 
@@ -85,7 +86,6 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   const [search, setSearch] = useState<string>();
   const drag = useRef<{ column: string; left: number; width: number }>(undefined);
   const pane = useRef<HTMLDivElement>(null);
-  const awaitingG = useRef(false);
   const directories = chain(directory.path, workspace);
   // `entries` and `directories` are left out of the dependencies on purpose: they only say which columns this pass reads,
   // and what comes back is stored in them, so depending on them would read a column again for every column read.
@@ -194,6 +194,8 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
     setCursor({ column: parent, name: nameOf(path) });
     showPath('directory', parent);
   };
+  const down = () => moveTo((at) => at + 1);
+  const up = () => moveTo((at) => at - 1);
   // A query picks its first match as it is typed, so the box and the columns agree on what is held.
   const type = (query: string) => {
     setSearch(query);
@@ -205,7 +207,7 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
     if (next) seat(next);
   };
   // The keys belong to the panel that holds the focus: the shell hands a tab its keys by focusing the panel, and a click
-  // on a column focuses something inside it. The listener is read after every render, so a press always moves over the
+  // on a column focuses something inside it. The bindings are read after every render, so a press always moves over the
   // columns on screen rather than the ones a mount captured.
   useEffect(() => {
     const panel = pane.current?.closest<HTMLElement>('.sidebar-panel');
@@ -215,41 +217,27 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
       // The keys go back to the panel, since the box that held the focus unmounts with the press.
       panel.focus();
     };
-    const onKey = (event: KeyboardEvent) => {
-      if (!(event.target instanceof Node) || !panel.contains(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
-      // While the box is open its own letters are the query, and only the keys that move the cursor or leave it are read.
-      if (search !== undefined) {
-        if (event.key === 'Escape' || event.key === 'Enter') { event.preventDefault(); closeSearch(); }
-        else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); searchStep(event.key === 'ArrowDown' ? 1 : -1); }
-        return;
-      }
-      // `gg` is the one press that waits for a second: the next key it reads either completes it or drops it.
-      if (event.key === 'g') {
-        event.preventDefault();
-        if (awaitingG.current) moveTo(() => 0);
-        awaitingG.current = !awaitingG.current;
-        return;
-      }
-      awaitingG.current = false;
-      const action = event.key === 'j' || event.key === 'ArrowDown' ? () => moveTo((at) => at + 1)
-        : event.key === 'k' || event.key === 'ArrowUp' ? () => moveTo((at) => at - 1)
-          : event.key === 'G' ? () => moveTo((at, count) => count - 1)
-            : event.key === 'l' || event.key === 'ArrowRight' || event.key === 'Enter' ? into
-              : event.key === 'h' || event.key === 'ArrowLeft' ? out
-                : event.key === '/' ? () => setSearch('')
-                  : undefined;
-      if (!action) return;
-      event.preventDefault();
-      action();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // While the box is open its own letters are the query: the box holds the keys, so the presses bound then say `insert`.
+    return bindKeys(panel, search === undefined ? [
+      { keys: 'j', run: down },
+      { keys: '<Down>', run: down },
+      { keys: 'k', run: up },
+      { keys: '<Up>', run: up },
+      { keys: 'gg', run: () => moveTo(() => 0) },
+      { keys: 'G', run: () => moveTo((_, count) => count - 1) },
+      { keys: 'l', run: into },
+      { keys: '<Right>', run: into },
+      { keys: '<Enter>', run: into },
+      { keys: 'h', run: out },
+      { keys: '<Left>', run: out },
+      { keys: '/', run: () => setSearch('') },
+    ] : [
+      { keys: '<Escape>', insert: true, run: closeSearch },
+      { keys: '<Enter>', insert: true, run: closeSearch },
+      { keys: '<Down>', insert: true, run: () => searchStep(1) },
+      { keys: '<Up>', insert: true, run: () => searchStep(-1) },
+    ]);
   });
-  // A click anywhere on the pane drops the `g` that waits for its second press.
-  const clickPane = () => {
-    awaitingG.current = false;
-    setSearch(undefined);
-  };
   const grab = (column: string) => (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -271,7 +259,7 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
       <input aria-label="搜索" placeholder="搜索本层" spellCheck={false} autoFocus value={search} onChange={(event) => type(event.target.value)} />
       <span className="file-search-count">{matches.length ? `${matchAt + 1}/${matches.length}` : '无匹配'}</span>
     </div>}
-    <div className="file-column-row" ref={pane} data-resized={widened ? '' : undefined} onPointerDown={clickPane}>
+    <div className="file-column-row" ref={pane} data-resized={widened ? '' : undefined} onPointerDown={() => setSearch(undefined)}>
       {shown.map((column, index) => {
         const listing = entries.get(column);
         // The entry this column holds open, which is the level below it; the last column holds none.
