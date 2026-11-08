@@ -31,3 +31,11 @@
 .file-search { position: absolute; top: 4px; right: 8px; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 2px 6px; border: 1px solid var(--wc-border); border-radius: 4px; background: var(--wc-surface); }
 .file-search input { width: 148px; padding: 2px 0; border: 0; background: transparent; color: inherit; font: inherit; outline: none; }
 .file-search-count { color: var(--wc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* The menu hangs over the columns, from the row the right-click landed on. */
+.file-menu { position: absolute; z-index: 3; min-width: 132px; padding: 4px; border: 1px solid var(--wc-border); border-radius: 6px; background: var(--wc-background); box-shadow: 0 12px 28px #0007; }
+.file-menu button { display: block; width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.file-menu button:hover { background: var(--wc-selection); }
+/* What the last download says, in a line of its own under the columns, so no entry is pushed by it. */
+.file-note { flex-shrink: 0; padding: 4px 8px; border-top: 1px solid var(--wc-border); color: var(--wc-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-note[role=alert] { color: var(--wc-red); }

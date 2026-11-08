@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DirectoryEntry, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { bindKeys } from '@lengmoxxl/sdk/keys';
@@ -84,6 +84,10 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   const [widths, setWidths] = useState(new Map<string, number>());
   // The query the search box holds; `undefined` is the box closed.
   const [search, setSearch] = useState<string>();
+  // The open context menu, placed against the panel, and the file it was opened on.
+  const [menu, setMenu] = useState<{ column: string; name: string; x: number; y: number }>();
+  // What the last download says, under the columns, until it is old enough to leave.
+  const [note, setNote] = useState<{ text: string; problem?: boolean }>();
   const drag = useRef<{ column: string; left: number; width: number }>(undefined);
   const pane = useRef<HTMLDivElement>(null);
   const directories = chain(directory.path, workspace);
@@ -146,6 +150,7 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   // The entries a column lists, which is nothing while it is still being read.
   const listingOf = (column: string) => entries.get(column) ?? [];
   const namesOf = (column: string) => listingOf(column).map((item) => item.name);
+  const itemOf = (column: string, name: string) => listingOf(column).find((item) => item.name === name);
   // The search looks through the deepest column, the level being picked from.
   const level = namesOf(deepest);
   const matchesOf = (query: string) => level.filter((name) => name.toLowerCase().includes(query.trim().toLowerCase()));
@@ -181,9 +186,33 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
     if (item.isDirectory) setCursor(undefined);
     showPath(item.isDirectory ? 'directory' : 'file', path);
   };
+  const download = (column: string, name: string) => {
+    setMenu(undefined);
+    void context.ui.request<{ path: string }>('download', { machine: directory.machine, path: childOf(column, name) })
+      .then((saved) => setNote({ text: `已下载到 ${saved.path}` }))
+      .catch((problem: Error) => setNote({ text: problem.message, problem: true }));
+  };
+  const downloadHeld = () => {
+    if (!cursor) return;
+    const item = itemOf(cursor.column, cursor.name);
+    if (item && !item.isDirectory) download(cursor.column, item.name);
+  };
+  // The menu is placed against the panel, so the pointer's place in it is where it opens, kept inside its edges.
+  const openMenu = (event: ReactMouseEvent<HTMLButtonElement>, column: string, item: DirectoryEntry) => {
+    if (item.isDirectory) return;
+    event.preventDefault();
+    setCursor({ column, name: item.name });
+    const box = event.currentTarget.closest('.file-columns')!.getBoundingClientRect();
+    setMenu({ column, name: item.name, x: Math.min(event.clientX - box.left, box.width - 144), y: Math.min(event.clientY - box.top, box.height - 36) });
+  };
+  useEffect(() => {
+    if (!note) return;
+    const timer = setTimeout(() => setNote(undefined), 4000);
+    return () => clearTimeout(timer);
+  }, [note]);
   const into = () => {
     if (!cursor) return;
-    const item = listingOf(cursor.column).find((one) => one.name === cursor.name);
+    const item = itemOf(cursor.column, cursor.name);
     if (item) pick(cursor.column, item);
   };
   // A parent is where `h` goes, never above the workspace, which is where the chain starts.
@@ -230,7 +259,9 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
       { keys: '<Enter>', run: into },
       { keys: 'h', run: out },
       { keys: '<Left>', run: out },
+      { keys: 'd', run: downloadHeld },
       { keys: '/', run: () => setSearch('') },
+      { keys: '<Escape>', run: () => setMenu(undefined) },
     ] : [
       { keys: '<Escape>', insert: true, run: closeSearch },
       { keys: '<Enter>', insert: true, run: closeSearch },
@@ -259,7 +290,7 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
       <input aria-label="搜索" placeholder="搜索本层" spellCheck={false} autoFocus value={search} onChange={(event) => type(event.target.value)} />
       <span className="file-search-count">{matches.length ? `${matchAt + 1}/${matches.length}` : '无匹配'}</span>
     </div>}
-    <div className="file-column-row" ref={pane} data-resized={widened ? '' : undefined} onPointerDown={() => setSearch(undefined)}>
+    <div className="file-column-row" ref={pane} data-resized={widened ? '' : undefined} onPointerDown={() => { setSearch(undefined); setMenu(undefined); }}>
       {shown.map((column, index) => {
         const listing = entries.get(column);
         // The entry this column holds open, which is the level below it; the last column holds none.
@@ -271,7 +302,7 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
               const path = childOf(column, entry.name);
               const mark = git?.workspace === workspace ? git.marks.get(path) : undefined;
               const badge = mark && !entry.isDirectory ? mark : undefined;
-              return <button key={entry.name} title={badge ? `${entry.name} · ${gitLabels[badge]}` : entry.name} data-git={mark} data-cursor={holds(column, entry.name) ? '' : undefined} aria-current={path === opened || undefined} onClick={() => pick(column, entry)}>
+              return <button key={entry.name} title={badge ? `${entry.name} · ${gitLabels[badge]}` : entry.name} data-git={mark} data-cursor={holds(column, entry.name) ? '' : undefined} aria-current={path === opened || undefined} onClick={() => pick(column, entry)} onContextMenu={(event) => openMenu(event, column, entry)}>
                 <svg className="file-icon" data-kind={entry.isDirectory ? 'folder' : 'file'} aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4">
                   {entry.isDirectory ? <path d="M2 5h6l2 2h8v10H2z" /> : <path d="M5 2h6l4 4v12H5z M11 2v5h4 M8 11h4 M8 14h4" />}
                 </svg><span className="file-name">{entry.name}{entry.isDirectory ? '/' : ''}</span>{badge && <span className="file-git" aria-hidden="true">{badge}</span>}
@@ -283,6 +314,10 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
         </div>;
       })}
     </div>
+    {menu && <div className="file-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+      <button role="menuitem" onClick={() => download(menu.column, menu.name)}>下载到 Downloads</button>
+    </div>}
+    {note && <div className="file-note" role={note.problem ? 'alert' : undefined}>{note.text}</div>}
   </div>;
 }
 

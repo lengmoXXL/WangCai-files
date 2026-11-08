@@ -1,4 +1,6 @@
-import { posix } from 'node:path';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join, posix } from 'node:path';
 import type { MachineConnection } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { machineKey, type FileClick, type GitLetter, type GitStatus } from './shared';
@@ -37,6 +39,17 @@ function readStatus(stdout: string): Record<string, GitLetter> {
 // A git run over a connection, with the index lock off so reading never takes the lock a writer wants.
 const git = (connection: MachineConnection, cwd: string, args: string[]) =>
   connection.subprocess.exec('git', args, { cwd, env: { GIT_OPTIONAL_LOCKS: '0' } });
+
+// Where a downloaded file lands: the name it came with, numbered when that name is taken, so nothing already in the
+// directory is written over.
+async function freeName(directory: string, name: string) {
+  const extension = posix.extname(name);
+  const stem = name.slice(0, name.length - extension.length);
+  for (let count = 1; ; count++) {
+    const target = join(directory, count === 1 ? name : `${stem}-${count - 1}${extension}`);
+    if (!(await access(target).then(() => true, () => false))) return target;
+  }
+}
 
 export function activate(context: MainContext) {
   const pending = new Set<AbortController>();
@@ -92,6 +105,17 @@ export function activate(context: MainContext) {
         // A machine without git, or a directory the command cannot run in, is just a picker with no marks.
         return null;
       }
+    })));
+  // The copy is made on this machine rather than the file's, so a path on an ssh machine lands where it can be opened:
+  // `homedir()` is the app's own, not the one the bytes came from.
+  handlers.push(context.ui.handle('download', ({ machine, path }: { machine: FileClick['machine']; path: string }) =>
+    withConnection(machine, async (connection) => {
+      const bytes = await connection.fs.readFile(path);
+      const directory = join(homedir(), 'Downloads');
+      await mkdir(directory, { recursive: true });
+      const target = await freeName(directory, posix.basename(path));
+      await writeFile(target, bytes);
+      return { path: target };
     })));
 
   // One watch set per tab: the window keeps a tab per workspace, and a tab that stops showing something must not stop
