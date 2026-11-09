@@ -17,7 +17,8 @@
 .file-list button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
 .file-list button:hover { background: var(--wc-overlay); }
 .file-list button[aria-current] { background: var(--wc-selection); }
-.file-list button[data-cursor] { outline: 1px solid var(--wc-accent); outline-offset: -1px; }
+/* The cursor's ring is the keys' place in the list, drawn while the panel they are handed to has the focus. */
+.sidebar-panel:focus-within .file-list button[data-cursor] { outline: 1px solid var(--wc-accent); outline-offset: -1px; }
 .file-list button:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
 .file-list button .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--wc-muted); }
