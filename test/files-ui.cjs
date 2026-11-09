@@ -81,10 +81,15 @@ const held = async (page) => [
   await cursor(page).evaluate((element) => element.closest('nav').getAttribute('aria-label')),
 ];
 
-// The box `/` opens over the columns, its field, and the count it shows.
+// The box `/` opens over the path bar, its field, and the count it shows.
 const searchBox = (page) => page.locator('.file-search');
 const searchField = (page) => searchBox(page).getByRole('textbox', { name: '搜索', exact: true });
 const searchCount = (page) => searchBox(page).locator('.file-search-count').innerText();
+
+// The path bar over the columns: the base path it names, and the button that puts it back on the workspace.
+const baseBar = (page) => page.locator('.file-header');
+const basePath = (page) => page.locator('.file-base');
+const resetBase = (page) => baseBar(page).getByRole('button', { name: '回到工作区', exact: true });
 
 // The row of columns, which is the pane a widened column scrolls in.
 const columnRow = (page) => page.locator('.file-column-row');
@@ -127,6 +132,9 @@ module.exports = {
   searchBox,
   searchField,
   searchCount,
+  baseBar,
+  basePath,
+  resetBase,
   columnRow,
   names,
   resizeHandle,

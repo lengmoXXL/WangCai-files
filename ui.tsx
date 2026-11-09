@@ -37,15 +37,17 @@ const parentOf = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
 const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 // A child's path, with the root's own slash left out of the join.
 const childOf = (base: string, name: string) => `${base === '/' ? '' : base}/${name}`;
+// Whether one path tops another: it is that path, or a directory the other sits under.
+const tops = (base: string, path: string) => base === path || path.startsWith(`${base}/`);
 
-// The directory chain from what the path and the workspace have in common down to the path itself: the picker gives
+// The directory chain from what the path and the base path have in common down to the path itself: the picker gives
 // every level a column of its own.
-function chain(path: string, workspace: string) {
+function chain(path: string, base: string) {
   const directories: string[] = [];
   let current = path;
   for (; ; ) {
     directories.push(current);
-    if (current === '/' || workspace === current || workspace.startsWith(`${current}/`)) return directories.reverse();
+    if (current === '/' || tops(current, base)) return directories.reverse();
     current = parentOf(current);
   }
 }
@@ -88,9 +90,12 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   const [menu, setMenu] = useState<{ column: string; name: string; x: number; y: number }>();
   // What the last download says, under the columns, until it is old enough to leave.
   const [note, setNote] = useState<{ text: string; problem?: boolean }>();
+  // The base path raised above the workspace by `h`; left out, the columns start where the workspace does.
+  const [raised, setRaised] = useState<string>();
   const drag = useRef<{ column: string; left: number; width: number }>(undefined);
   const pane = useRef<HTMLDivElement>(null);
-  const directories = chain(directory.path, workspace);
+  const base = raised ?? workspace;
+  const directories = chain(directory.path, base);
   // `entries` and `directories` are left out of the dependencies on purpose: they only say which columns this pass reads,
   // and what comes back is stored in them, so depending on them would read a column again for every column read.
   useEffect(() => {
@@ -113,7 +118,7 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
         .catch((problem: Error) => { if (alive) setError(problem.message); });
     }
     return () => { alive = false; };
-  }, [context, directory, workspace, stale]);
+  }, [context, directory, base, stale]);
   // The marks belong to the repository rather than to the columns, so they are read in a request of their own.
   useEffect(() => {
     if (!workspace) return;
@@ -130,20 +135,20 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
     setChanges((count) => count + 1);
     // The repository is here for the marks alone, and `stale` holds the columns.
     if (path !== repository) setStale((current) => new Set(current).add(path));
-  }), [context, directory, workspace, holder, repository]);
+  }), [context, directory, base, holder, repository]);
   // The columns a chain dropped are offered their room again when the chain changes, since another chain packs
   // differently.
-  useEffect(() => setDropped(0), [directory, workspace]);
+  useEffect(() => setDropped(0), [directory, base]);
   // The deepest column stays on screen whatever the pane had to drop.
   const deepestIndex = directories.length - 1;
   const widened = widths.size > 0;
   // A column is as wide as its own entries, so how much of the chain fits is only known once they are in: the pane
-  // drops the shallowest column until the path's own column fits, leaving the workspace leftmost whenever it can.
+  // drops the shallowest column until the path's own column fits, leaving the base leftmost whenever it can.
   useLayoutEffect(() => {
     const element = pane.current;
     if (widened || !element || !element.clientWidth || element.scrollWidth <= element.clientWidth || dropped >= deepestIndex) return;
     setDropped(dropped + 1);
-  }, [directory, entries, workspace, dropped, deepestIndex, widened]);
+  }, [directory, entries, dropped, deepestIndex, widened]);
   const first = Math.min(dropped, deepestIndex);
   const shown = directories.slice(first);
   const deepest = directories[deepestIndex];
@@ -164,7 +169,7 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   useEffect(() => {
     if (search !== undefined || (cursor && shown.includes(cursor.column))) return;
     if (level.length) seat(level[0]);
-  }, [cursor, directory, dropped, entries, search, workspace]);
+  }, [cursor, directory, dropped, entries, search, base]);
   // A column can be longer than the pane, so the cursor is scrolled into view whenever the keys move it.
   useLayoutEffect(() => {
     pane.current?.querySelector('[data-cursor]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -215,13 +220,21 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
     const item = itemOf(cursor.column, cursor.name);
     if (item) pick(cursor.column, item);
   };
-  // A parent is where `h` goes, never above the workspace, which is where the chain starts.
+  // A parent is where `h` goes. The base path has nothing above it in the chain, so the press climbs out of the panel's
+  // top column by raising the base, and the view follows it up.
   const out = () => {
     const path = directory.path;
     const parent = parentOf(path);
-    if (parent === path || path === workspace) return;
+    if (parent === path) return;
+    if (path === base) setRaised(parent);
     setCursor({ column: parent, name: nameOf(path) });
     showPath('directory', parent);
+  };
+  // The button puts the base path back on the workspace. The columns above it go, and a path the workspace does not
+  // top comes back to it, since the chain has to start from the base.
+  const resetBase = () => {
+    setRaised(undefined);
+    if (!tops(workspace, directory.path)) showPath('directory', workspace);
   };
   const down = () => moveTo((at) => at + 1);
   const up = () => moveTo((at) => at - 1);
@@ -286,10 +299,16 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   };
   if (error) return <div className="file-message" role="alert">{error}</div>;
   return <div className="file-columns">
-    {search !== undefined && <div className="file-search">
-      <input aria-label="搜索" placeholder="搜索本层" spellCheck={false} autoFocus value={search} onChange={(event) => type(event.target.value)} />
-      <span className="file-search-count">{matches.length ? `${matchAt + 1}/${matches.length}` : '无匹配'}</span>
-    </div>}
+    <div className="file-header">
+      <button className="file-button" aria-label="回到工作区" title={`回到工作区 ${workspace}`} disabled={base === workspace} onClick={resetBase}>
+        <svg className="file-glyph" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 9.5 10 3l7 6.5V17H3z" /><path d="M8 17v-4h4v4" /></svg>
+      </button>
+      <div className="file-base" title={base}>{base}</div>
+      {search !== undefined && <div className="file-search">
+        <input aria-label="搜索" placeholder="搜索本层" spellCheck={false} autoFocus value={search} onChange={(event) => type(event.target.value)} />
+        <span className="file-search-count">{matches.length ? `${matchAt + 1}/${matches.length}` : '无匹配'}</span>
+      </div>}
+    </div>
     <div className="file-column-row" ref={pane} data-resized={widened ? '' : undefined} onPointerDown={() => { setSearch(undefined); setMenu(undefined); }}>
       {shown.map((column, index) => {
         const listing = entries.get(column);
@@ -321,7 +340,7 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
   </div>;
 }
 
-// The page a tab draws: the columns of a directory and nothing above them, or the one line about why there is no
+// The page a tab draws: the path bar and the columns under it, or the one line about why there is no
 // directory to draw — a failure, still connecting, or no terminal to take one from.
 function Page({ context, workspaceId, tab }: { context: UiContext; workspaceId?: string; tab: Tab }) {
   const [workspace, setWorkspace] = useState('');

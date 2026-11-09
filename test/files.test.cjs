@@ -10,7 +10,7 @@ test('a directory opens a column of its own, and a file is handed to the editor 
   writeFileSync(join(home, 'sample.ts'), 'const first = 1;\n');
   writeFileSync(join(home, 'sub/inside.md'), '# Inside\n');
   await openFilesWorkspace(page);
-  // The tab is the columns and nothing above them, which is the only child its root has.
+  // The tab's root is the columns alone; the path bar sits inside them, above the columns.
   assert.deepEqual(await filesPanels(page).locator('.file-browser').evaluate((element) => [...element.children].map((child) => child.className)), ['file-columns']);
   const directory = columnOf(page, home);
   await entry(directory, 'sub/').click();

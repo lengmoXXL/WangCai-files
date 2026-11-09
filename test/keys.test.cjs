@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdirSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { columnOf, columnRow, columns, cursor, entry, held, lists, names, openFilesWorkspace, resizeHandle, searchBox, searchCount, searchField, shownPanel, width } = require('./files-ui.cjs');
+const { baseBar, columnOf, columnRow, columns, cursor, entry, held, lists, names, openFilesWorkspace, resizeHandle, searchBox, searchCount, searchField, shownPanel, width } = require('./files-ui.cjs');
 
 test('the keys walk the columns, the search filters the level being picked from, and a drag widens a column', { timeout: 180000 }, () => withWindow('wangcai-keys', lists, async ({ home, page, errors }) => {
   mkdirSync(join(home, 'sub/deep'), { recursive: true });
@@ -58,13 +58,14 @@ test('the keys walk the columns, the search filters the level being picked from,
   await search('sub');
   const box = await searchBox(page).boundingBox();
   const panel = await shownPanel(page).boundingBox();
+  const bar = await baseBar(page).boundingBox();
   const drawn = await columns(page).evaluateAll((all) => all.map((element) => {
     const rect = element.getBoundingClientRect();
-    return { top: Math.round(rect.top), middle: rect.top + rect.height / 2 };
+    return Math.round(rect.top);
   }));
-  assert.ok(drawn.every(({ top }) => top === Math.round(panel.y)), 'the columns still start at the panel top');
-  assert.ok(box.x > panel.x + panel.width / 2 && box.x + box.width <= panel.x + panel.width, 'the box is over the right of the columns');
-  assert.ok(drawn.every(({ middle }) => box.y < middle), 'the box is over the top of the columns');
+  assert.ok(drawn.every((top) => top >= Math.round(bar.y + bar.height)), 'the columns start below the path bar');
+  assert.ok(box.x > panel.x + panel.width / 2 && box.x + box.width <= panel.x + panel.width, 'the box is over the right of the path bar');
+  assert.ok(box.y >= bar.y && box.y + box.height <= bar.y + bar.height + 1, 'the box sits in the path bar');
   await until(async () => (await held(page))[0] === 'sub/');
   await closeSearch();
   // `l` goes down a level and the cursor goes with it, while `h` comes back up onto the directory it left.

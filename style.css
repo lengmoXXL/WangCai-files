@@ -27,8 +27,15 @@
 .file-list button[data-git=A], .file-list button[data-git=R], .file-list button[data-git=C], .file-list button[data-git=U] { color: var(--wc-green); }
 .file-list button[data-git=D], .file-list button[data-git='!'] { color: var(--wc-red); }
 
-/* The box pops over the columns, so they keep the room they had. */
-.file-search { position: absolute; top: 4px; right: 8px; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 2px 6px; border: 1px solid var(--wc-border); border-radius: 4px; background: var(--wc-surface); }
+/* The path bar: the base path the columns start from, and the button that puts it back on the workspace. */
+.file-header { position: relative; flex-shrink: 0; display: flex; align-items: center; gap: 4px; min-width: 0; padding: 3px 6px; border-bottom: 1px solid var(--wc-border); }
+.file-button { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 22px; padding: 3px; border: 0; border-radius: 4px; background: transparent; color: var(--wc-muted); cursor: pointer; }
+.file-button:hover:not(:disabled) { color: var(--wc-foreground); background: var(--wc-overlay); }
+.file-button:disabled { opacity: 0.35; cursor: default; }
+.file-glyph { width: 14px; height: 14px; }
+.file-base { flex: 1; min-width: 0; overflow: hidden; padding: 0 6px; border: 1px solid var(--wc-border); border-radius: 4px; line-height: 16px; color: var(--wc-muted); text-overflow: ellipsis; white-space: nowrap; }
+/* The box pops over the path, so the bar keeps the room it had. */
+.file-search { position: absolute; top: 50%; right: 6px; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 2px 6px; border: 1px solid var(--wc-border); border-radius: 4px; background: var(--wc-surface); transform: translateY(-50%); }
 .file-search input { width: 148px; padding: 2px 0; border: 0; background: transparent; color: inherit; font: inherit; outline: none; }
 .file-search-count { color: var(--wc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 
