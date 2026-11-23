@@ -10,7 +10,7 @@ export const keys = { '<leader>f': { global: true, insert: true, desc: '打开�
 // Fields this plugin takes from init.ts.
 export const config = {
   font: {
-    family: { type: 'string', default: '"DejaVuSansM Nerd Font Mono", monospace' },
+    family: { type: 'string', default: 'Menlo, monospace' },
   },
 };
 
