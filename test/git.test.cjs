@@ -39,17 +39,27 @@ test('the columns mark git changes the way VS Code does', { timeout: 180000 }, (
     return (await one.count()) ? one.getAttribute('data-git') : null;
   };
   const colour = (column, name) => label(entry(column, name)).evaluate((element) => getComputedStyle(element).color);
+  // The marks take the shell's own theme tokens, so the colours are read out of the page rather than written down here.
+  const theme = (name) => page.evaluate((name) => {
+    const probe = document.createElement('div');
+    probe.style.color = `var(${name})`;
+    document.body.append(probe);
+    const colour = getComputedStyle(probe).color;
+    probe.remove();
+    return colour;
+  }, name);
+  const [yellow, green, red] = [await theme('--wc-yellow'), await theme('--wc-green'), await theme('--wc-red')];
   const badge = (column, name) => entry(column, name).locator('.file-git');
-  assert.deepEqual([await mark(directory, 'kept.txt'), await colour(directory, 'kept.txt')], ['M', 'rgb(228, 197, 144)']);
-  assert.deepEqual([await mark(directory, 'fresh.txt'), await colour(directory, 'fresh.txt')], ['U', 'rgb(155, 199, 188)']);
-  assert.deepEqual([await mark(directory, 'staged.txt'), await colour(directory, 'staged.txt')], ['A', 'rgb(155, 199, 188)']);
-  assert.deepEqual([await mark(directory, 'new name.txt'), await colour(directory, 'new name.txt')], ['R', 'rgb(155, 199, 188)']);
+  assert.deepEqual([await mark(directory, 'kept.txt'), await colour(directory, 'kept.txt')], ['M', yellow]);
+  assert.deepEqual([await mark(directory, 'fresh.txt'), await colour(directory, 'fresh.txt')], ['U', green]);
+  assert.deepEqual([await mark(directory, 'staged.txt'), await colour(directory, 'staged.txt')], ['A', green]);
+  assert.deepEqual([await mark(directory, 'new name.txt'), await colour(directory, 'new name.txt')], ['R', green]);
   // A deleted file is gone from the listing, so its folder is what carries the state.
-  assert.deepEqual([await mark(directory, 'dropped/'), await colour(directory, 'dropped/')], ['D', 'rgb(230, 140, 140)']);
+  assert.deepEqual([await mark(directory, 'dropped/'), await colour(directory, 'dropped/')], ['D', red]);
   // A folder holding a change takes its colour without a badge, and a file git never mentions takes neither.
-  assert.deepEqual([await mark(directory, 'sub/'), await colour(directory, 'sub/'), await badge(directory, 'sub/').count()], ['M', 'rgb(228, 197, 144)', 0]);
+  assert.deepEqual([await mark(directory, 'sub/'), await colour(directory, 'sub/'), await badge(directory, 'sub/').count()], ['M', yellow, 0]);
   assert.deepEqual([await stateOf(directory, 'clean.txt'), await badge(directory, 'clean.txt').count()], [null, 0]);
-  assert.deepEqual([await mark(directory, 'loose/'), await colour(directory, 'loose/')], ['U', 'rgb(155, 199, 188)']);
+  assert.deepEqual([await mark(directory, 'loose/'), await colour(directory, 'loose/')], ['U', green]);
   // The badge names the state to a pointing reader, while the row's accessible name stays the file's own.
   assert.deepEqual([await badge(directory, 'kept.txt').innerText(), await entry(directory, 'kept.txt').getAttribute('title')], ['M', 'kept.txt · 已修改']);
   // A level below keeps the marks it has, so a folder is only a way in.

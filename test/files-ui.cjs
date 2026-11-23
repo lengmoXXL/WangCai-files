@@ -62,8 +62,7 @@ const openFilesWorkspace = async (page) => {
 };
 
 // Reading a file through the editor, whose panel is the one the file was handed to.
-const editorLines = (scope) => scope.locator('.monaco-editor .view-lines');
-const codeView = (scope, text) => editorLines(scope).filter({ hasText: text });
+const codeView = (scope, text) => scope.locator('.editor-code .cm-content').filter({ hasText: text });
 
 // The address box in the editor's header, and the path it shows once the panel has taken one in.
 const pathBox = (scope) => scope.getByRole('textbox', { name: '路径', exact: true });
