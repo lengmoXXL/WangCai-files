@@ -259,12 +259,11 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
       // The keys go back to the panel, since the box that held the focus unmounts with the press.
       panel.focus();
     };
-    // While the box is open its own letters are the query: the box holds the keys, so the presses bound then say `insert`.
-    return bindKeys(panel, search === undefined ? [
-      { keys: 'j', run: down },
-      { keys: '<Down>', run: down },
-      { keys: 'k', run: up },
-      { keys: '<Up>', run: up },
+    const columnKeys = [
+      { keys: 'j', repeat: true, run: down },
+      { keys: '<Down>', repeat: true, run: down },
+      { keys: 'k', repeat: true, run: up },
+      { keys: '<Up>', repeat: true, run: up },
       { keys: 'gg', run: () => moveTo(() => 0) },
       { keys: 'G', run: () => moveTo((_, count) => count - 1) },
       { keys: 'l', run: into },
@@ -275,12 +274,15 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
       { keys: 'd', run: downloadHeld },
       { keys: '/', run: () => setSearch('') },
       { keys: '<Escape>', run: () => setMenu(undefined) },
-    ] : [
+    ];
+    // While the box is open its own letters are the query: the box holds the keys, so the presses bound then say `insert`.
+    const searchKeys = [
       { keys: '<Escape>', insert: true, run: closeSearch },
       { keys: '<Enter>', insert: true, run: closeSearch },
       { keys: '<Down>', insert: true, run: () => searchStep(1) },
       { keys: '<Up>', insert: true, run: () => searchStep(-1) },
-    ]);
+    ];
+    return bindKeys(panel, search === undefined ? columnKeys : searchKeys);
   });
   const grab = (column: string) => (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
