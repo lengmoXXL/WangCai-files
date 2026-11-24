@@ -2,8 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { mkdirSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { alert, clickFile, codeView, columnOf, columns, editorTab, emptyDirectory, entry, filesPanels, filesTab, lists, machine, openFilesWorkspace, shownPanel, waitForPath } = require('./files-ui.cjs');
+const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { alert, clickFile, codeView, columnOf, columns, cursor, editorTab, emptyDirectory, entry, filesPanels, filesTab, held, lists, machine, openFilesWorkspace, revealFile, shownPanel, waitForPath } = require('./files-ui.cjs');
 
 test('a directory opens a column of its own, and a file is handed to the editor instead of being read here', { timeout: 180000 }, () => withWindow('wangcai-files', lists, async ({ home, page, errors }) => {
   mkdirSync(join(home, 'sub/empty'), { recursive: true });
@@ -49,5 +49,30 @@ test('a directory opens a column of its own, and a file is handed to the editor 
   // An empty directory says so rather than showing nothing at all.
   await emptyDirectory(page).waitFor();
   await page.screenshot({ path: 'test/output/screenshots/files-columns.png' });
+  assert.deepEqual(errors, []);
+}));
+test('a reveal seats the file it names, wherever the cursor was', { timeout: 180000 }, () => withWindow('wangcai-files-reveal', lists, async ({ home, page, errors }) => {
+  mkdirSync(join(home, 'sub'), { recursive: true });
+  writeFileSync(join(home, 'alpha.md'), 'a\n');
+  writeFileSync(join(home, 'omega.md'), 'o\n');
+  writeFileSync(join(home, 'sub/inside.md'), '# Inside\n');
+  writeFileSync(join(home, 'sub/other.md'), '# Other\n');
+  await openFilesWorkspace(page);
+  const directory = columnOf(page, home);
+  await entry(directory, 'omega.md').waitFor();
+  await until(async () => (await cursor(page).count()) === 1);
+  // The cursor starts on the first entry; a reveal of another file in the same column moves it onto that file.
+  await revealFile(page, { type: 'file', machine, path: join(home, 'omega.md') });
+  await until(async () => (await held(page))[0] === 'omega.md');
+  // A reveal into another directory seats the file there once its column is read, not the column's first entry.
+  await revealFile(page, { type: 'file', machine, path: join(home, 'sub/other.md') });
+  await columnOf(page, join(home, 'sub')).waitFor();
+  await until(async () => (await held(page))[0] === 'other.md');
+  assert.deepEqual(await held(page), ['other.md', join(home, 'sub')]);
+  // Moving off it and revealing it again seats it again.
+  await page.keyboard.press('k');
+  assert.deepEqual(await held(page), ['inside.md', join(home, 'sub')]);
+  await revealFile(page, { type: 'file', machine, path: join(home, 'sub/other.md') });
+  await until(async () => (await held(page))[0] === 'other.md');
   assert.deepEqual(errors, []);
 }));

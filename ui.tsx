@@ -15,14 +15,14 @@ let font: Font;
 // A directory, which is the only kind of entry a tab here shows: a file is handed to the editor instead.
 type Directory = Omit<FileClick, 'type'> & { type: 'directory' };
 
-// One tab: the directory its columns start from, and the call that draws it, which `openTab` fills in once the mount has
-// a root and hands back to the window as the tab's `onSelect`. A window keeps one tab per workspace, so this is what a
-// workspace's browsing has of its own.
-type Tab = { shown?: Directory; paint: () => void };
+// One tab: the directory its columns start from, the file a reveal asked to hold, and the call that draws it, which
+// `openTab` fills in once the mount has a root and hands back to the window as the tab's `onSelect`. A window keeps one
+// tab per workspace, so this is what a workspace's browsing has of its own.
+type Tab = { shown?: Directory; held?: FileClick; paint: () => void };
 const tabs = new Map<string, Tab>();
 // A directory can be sent before its tab was opened, since the sender asks for the tab after sending it: it waits
-// here, per workspace, for the tab that will show it.
-const waiting = new Map<string, Directory>();
+// here, per workspace, for the tab that will show it, with the file a reveal wants held.
+const waiting = new Map<string, { shown: Directory; held?: FileClick }>();
 
 const watch = (context: UiContext, machine: FileClick['machine'], holder: string, paths: string[], act: (path: string) => void) => {
   // The plugin can be disposed before either request lands, and the machine can be gone; neither is worth a pageerror.
@@ -71,7 +71,7 @@ function markFolders({ root, states }: GitStatus) {
 
 const gitLabels: Record<string, string> = { M: '已修改', A: '已新增', D: '已删除', R: '已重命名', C: '已复制', T: '类型已更改', U: '未跟踪', '!': '有冲突' };
 
-function Picker({ context, directory, workspace, holder, navigate }: { context: UiContext; directory: Directory; workspace: string; holder: string; navigate: (file: FileClick) => void }) {
+function Picker({ context, directory, workspace, holder, held, navigate }: { context: UiContext; directory: Directory; workspace: string; holder: string; held?: FileClick; navigate: (file: FileClick) => void }) {
   const [entries, setEntries] = useState(new Map<string, DirectoryEntry[]>());
   const [error, setError] = useState('');
   const [dropped, setDropped] = useState(0);
@@ -170,6 +170,16 @@ function Picker({ context, directory, workspace, holder, navigate }: { context: 
     if (search !== undefined || (cursor && shown.includes(cursor.column))) return;
     if (level.length) seat(level[0]);
   }, [cursor, directory, dropped, entries, search, base]);
+  // A reveal's file is seated once the deepest column lists it, whatever the cursor held; the ask is spent there, so a
+  // later read of the column leaves the cursor where the keys put it. After the fallback above, so its seat wins.
+  const taken = useRef<FileClick>(undefined);
+  useEffect(() => {
+    if (!held || taken.current === held) return;
+    const name = nameOf(held.path);
+    if (!namesOf(deepest).includes(name)) return;
+    taken.current = held;
+    seat(name);
+  }, [held, entries, deepest]);
   // A column can be longer than the pane, so the cursor is scrolled into view whenever the keys move it.
   useLayoutEffect(() => {
     pane.current?.querySelector('[data-cursor]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -373,7 +383,7 @@ function Page({ context, workspaceId, tab }: { context: UiContext; workspaceId?:
   const directory = tab.shown;
   return <section className="file-browser" aria-label="文件选择">
     {directory
-      ? <Picker context={context} directory={directory} workspace={workspace} holder={workspaceId ?? ''} navigate={(file) => show(context, tab, file)} />
+      ? <Picker context={context} directory={directory} workspace={workspace} holder={workspaceId ?? ''} held={tab.held} navigate={(file) => show(context, tab, file)} />
       : <div className="file-message" role={error ? 'alert' : undefined}>{error || (loading ? '正在读取…' : '请选择一个已连接的终端')}</div>}
   </section>;
 }
@@ -382,13 +392,15 @@ function Page({ context, workspaceId, tab }: { context: UiContext; workspaceId?:
 // is always a directory.
 const asDirectory = (file: FileClick): Directory => ({ ...file, type: 'directory' });
 
-// What a tab shows: a directory is its own, and a file goes to the editor, which is where it is read.
-function show(context: UiContext, tab: Tab, file: FileClick) {
+// What a tab shows: a directory is its own, and a file goes to the editor, which is where it is read. A reveal's file
+// rides along as `held` for the picker to seat; any other move clears it.
+function show(context: UiContext, tab: Tab, file: FileClick, held?: FileClick) {
   if (file.type === 'file') {
     void context.global.publish('onclick', file);
     return;
   }
   tab.shown = asDirectory(file);
+  tab.held = held;
   tab.paint();
 }
 
@@ -398,7 +410,7 @@ export function open(context: UiContext, record?: TabRecord) {
 
 function openTab(context: UiContext, workspaceId?: string) {
   const key = workspaceId ?? '';
-  const tab: Tab = { paint: () => {}, shown: waiting.get(key) };
+  const tab: Tab = { paint: () => {}, ...waiting.get(key) };
   waiting.delete(key);
   tabs.set(key, tab);
   context.host.tabs({ ...identity, workspaceId, onClose() {
@@ -430,9 +442,18 @@ export async function mount(_container: HTMLElement, context: UiContext) {
     const key = activeWorkspaceId ?? '';
     const tab = tabs.get(key);
     if (tab) show(context, tab, file);
-    else waiting.set(key, asDirectory(file));
+    else waiting.set(key, { shown: asDirectory(file) });
     // A view is asked for by the name the plugin has in `init.ts`, which is `files`; this tab's own id is `directory`.
     void context.global.publish('core:show-view', { plugin: 'files' });
   });
-  return () => { offActive(); off(); };
+  // A reveal names a file rather than its directory: the directory is shown and the file is what the picker holds.
+  const offReveal = context.global.subscribe<FileClick>('files:reveal', (file) => {
+    const key = activeWorkspaceId ?? '';
+    const tab = tabs.get(key);
+    const parent = asDirectory({ ...file, path: parentOf(file.path) });
+    if (tab) show(context, tab, parent, file);
+    else waiting.set(key, { shown: parent, held: file });
+    void context.global.publish('core:show-view', { plugin: 'files' });
+  });
+  return () => { offActive(); off(); offReveal(); };
 }

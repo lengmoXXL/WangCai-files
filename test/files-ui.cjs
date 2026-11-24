@@ -54,6 +54,8 @@ const alert = (page) => page.getByRole('alert');
 
 // A file or directory link clicked in a terminal, which is the event a file of a column is sent on as well.
 const clickFile = (page, file) => page.evaluate((click) => window.wangcai.call('publish', 'onclick', click), file);
+// A reveal asked for a file, which is the event the editor's `<leader>gf` sends: the directory is shown and the file held.
+const revealFile = (page, file) => page.evaluate((click) => window.wangcai.call('publish', 'files:reveal', click), file);
 
 // A workspace and this panel of it, which is the state most of these cases start from.
 const openFilesWorkspace = async (page) => {
@@ -122,6 +124,7 @@ module.exports = {
   filesPanels,
   alert,
   clickFile,
+  revealFile,
   openFilesWorkspace,
   codeView,
   waitForPath,
