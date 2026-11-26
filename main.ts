@@ -1,7 +1,7 @@
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, posix } from 'node:path';
-import type { MachineConnection } from '@lengmoxxl/sdk';
+import { workspaceAlias, type MachineConnection } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { machineKey, type FileClick, type GitLetter, type GitStatus } from './shared';
 
@@ -76,15 +76,15 @@ export function activate(context: MainContext) {
     }
   };
 
-  const handlers = ['list', 'resolve'].map((method) => context.ui.handle(method, ({ machine, path, sessionId, base }: { machine: FileClick['machine']; path?: string; sessionId?: string; base?: string }) =>
+  const handlers = ['list', 'resolve'].map((method) => context.ui.handle(method, ({ machine, path, workspaceId, base }: { machine: FileClick['machine']; path?: string; workspaceId?: string; base?: string }) =>
     withConnection(machine, async (connection) => {
       if (method === 'resolve') {
-        const target = path === undefined ? await connection.pty.cwd(sessionId!) : posix.resolve(base!, path);
+        const target = path === undefined ? await context.request<string>(workspaceAlias, 'cwd', { workspaceId }) : posix.resolve(base!, path);
         const stat = await connection.fs.stat(target);
         if (!stat) throw new Error(`路径不存在: ${target}`);
         return { type: stat.isDirectory ? 'directory' : 'file', machine, path: target };
       }
-      const directory = path ?? await connection.pty.cwd(sessionId!);
+      const directory = path ?? await context.request<string>(workspaceAlias, 'cwd', { workspaceId });
       const entries = await connection.fs.readDirectory(directory);
       entries.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name));
       return { path: directory, entries };
