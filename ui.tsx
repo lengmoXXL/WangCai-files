@@ -1,12 +1,14 @@
-import type { EditorView } from '@codemirror/view';
+import type { EditorState } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
 import { Vim, getCM } from '@replit/codemirror-vim';
 import { createRoot } from 'react-dom/client';
 import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DirectoryEntry, WorkspaceActive } from '@lengmoxxl/sdk';
 import type { TabRecord, UiContext } from '@lengmoxxl/sdk/channel';
 import { bindKeys } from '@lengmoxxl/sdk/keys';
-import { FileColumn, type ColumnCommand } from './column';
-import { childOf, type FileClick, type Font, type GitLetter, type GitStatus, type Settings } from './shared';
+import { FileColumn, columnState, type ColumnBuffers, type ColumnCommand } from './column';
+import { DirectoryEditReview, bufferChanged, planChanges, recordApplied, type DirectoryLocation, type PlannedChange } from './edit';
+import { childOf, entryText, machineKey, relativeEntryPath, type DirectoryEditResult, type FileClick, type Font, type GitLetter, type GitStatus, type Settings } from './shared';
 import './style.css';
 
 // What the tab is called, and the id the window remembers it by when it opens it again.
@@ -17,12 +19,34 @@ let font: Font;
 
 // A directory, which is the only kind of entry a tab here shows: a file is handed to the editor instead.
 type Directory = Omit<FileClick, 'type'> & { type: 'directory' };
+type Review = { column: DirectoryLocation; path: string; machine: FileClick['machine']; changes: PlannedChange[] };
+type EditMessage = { column: DirectoryLocation; text: string; problem?: true };
 
 // One tab: the directory its columns start from, the file a reveal asked to hold, and the call that draws it, which
 // `openTab` fills in once the mount has a root and hands back to the window as the tab's `onSelect`. A window keeps one
 // tab per workspace, so this is what a workspace's browsing has of its own.
-type Tab = { shown?: Directory; held?: FileClick; paint: () => void };
+type Tab = {
+  key: string;
+  shown?: Directory;
+  held?: FileClick;
+  buffers: ColumnBuffers;
+  review?: Review;
+  applying?: boolean;
+  message?: EditMessage;
+  refresh?: (paths: Set<string>) => void;
+  paint: () => void;
+};
 const tabs = new Map<string, Tab>();
+// A directory's buffers and Vim registers keep the same reference when its path changes.
+const locations = new Map<string, Map<string, DirectoryLocation>>();
+let lastLocationId = 0;
+function locationAt(machine: string, path: string) {
+  let known = locations.get(machine);
+  if (!known) locations.set(machine, known = new Map());
+  let location = known.get(path);
+  if (!location) known.set(path, location = { machine, path, id: ++lastLocationId });
+  return location;
+}
 // A directory can be sent before its tab was opened, since the sender asks for the tab after sending it: it waits
 // here, per workspace, for the tab that will show it, with the file a reveal wants held.
 const waiting = new Map<string, { shown: Directory; held?: FileClick }>();
@@ -39,7 +63,7 @@ const parentOf = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
 // The last name of a path, which is what sits under the path above it.
 const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 // Whether one path tops another: it is that path, or a directory the other sits under.
-const tops = (base: string, path: string) => base === path || path.startsWith(`${base}/`);
+const containsPath = (base: string, path: string) => base === path || path.startsWith(childOf(base, ''));
 
 // The directory chain from what the path and the base path have in common down to the path itself: the picker gives
 // every level a column of its own.
@@ -48,7 +72,7 @@ function chain(path: string, base: string) {
   let current = path;
   for (; ; ) {
     directories.push(current);
-    if (current === '/' || tops(current, base)) return directories.reverse();
+    if (current === '/' || containsPath(current, base)) return directories.reverse();
     current = parentOf(current);
   }
 }
@@ -70,8 +94,11 @@ function markFolders({ root, states }: GitStatus) {
   return marks;
 }
 
-function Picker({ context, directory, workspace, holder, held, navigate }: { context: UiContext; directory: Directory; workspace: string; holder: string; held?: FileClick; navigate: (file: FileClick) => void }) {
-  const [entries, setEntries] = useState(new Map<string, DirectoryEntry[]>());
+function Picker({ context, directory, workspace, tab, navigate }: { context: UiContext; directory: Directory; workspace: string; tab: Tab; navigate: (file: FileClick) => void }) {
+  const { key: holder, held, buffers, review, applying, message: editMessage } = tab;
+  const machine = machineKey(directory.machine);
+  const [cached, setCached] = useState({ machine, entries: new Map<string, DirectoryEntry[]>() });
+  const entries = cached.machine === machine ? cached.entries : new Map<string, DirectoryEntry[]>();
   const [error, setError] = useState('');
   const [dropped, setDropped] = useState(0);
   // Columns to read again: one is read again when the machine reports a change in it, and the listing already on
@@ -80,19 +107,28 @@ function Picker({ context, directory, workspace, holder, held, navigate }: { con
   // Marks move with anything on disk, a column or the repository, so their read counts the changes this watch reports.
   const [changes, setChanges] = useState(0);
   const [git, setGit] = useState<{ workspace: string; root: string; marks: Map<string, GitLetter> }>();
-  const [target, setTarget] = useState<{ column: string; name?: string }>();
+  const [target, setTarget] = useState<{ column: string; name?: string; line?: number }>();
   // The columns the mouse widened, by the width the drag leaves them.
   const [widths, setWidths] = useState(new Map<string, number>());
   // The query the search box holds; `undefined` is the box closed.
-  const [search, setSearch] = useState<string>();
+  const [search, setSearch] = useState<{ column: string; query: string }>();
   // The open context menu, placed against the panel, and the file it was opened on.
   const [menu, setMenu] = useState<{ column: string; name: string; x: number; y: number }>();
   // What the last download says, under the columns, until it is old enough to leave.
   const [note, setNote] = useState<{ text: string; problem?: boolean }>();
   const [raised, setRaised] = useState<string>();
+  const [vimPanels, setVimPanels] = useState<HTMLDivElement | null>(null);
   const drag = useRef<{ column: string; left: number; width: number }>(undefined);
   const pane = useRef<HTMLDivElement>(null);
-  const views = useRef(new Map<string, EditorView>());
+  const setEditMessage = (message?: EditMessage) => { tab.message = message; tab.paint(); };
+  useLayoutEffect(() => {
+    tab.refresh = (paths) => {
+      setStale((current) => new Set([...current, ...paths]));
+      setChanges((count) => count + 1);
+      setError('');
+    };
+    return () => { tab.refresh = undefined; };
+  }, [tab]);
   const restoreFocus = useRef(false);
   const base = raised ?? workspace;
   const directories = chain(directory.path, base);
@@ -106,7 +142,7 @@ function Picker({ context, directory, workspace, holder, held, navigate }: { con
       void context.ui.request<{ path: string; entries: DirectoryEntry[] }>('list', { machine: directory.machine, path: column })
         .then((listing) => {
           if (!alive) return;
-          setEntries((current) => new Map(current).set(column, listing.entries));
+          setCached((current) => ({ machine, entries: new Map(current.machine === machine ? current.entries : undefined).set(column, listing.entries) }));
           // A mark is spent by the read it asked for, so a pass that runs for another reason reads nothing again.
           setStale((current) => {
             if (!current.has(column)) return current;
@@ -118,7 +154,7 @@ function Picker({ context, directory, workspace, holder, held, navigate }: { con
         .catch((problem: Error) => { if (alive) setError(problem.message); });
     }
     return () => { alive = false; };
-  }, [context, directory, base, stale]);
+  }, [context, directory, machine, base, stale]);
   // The marks belong to the repository rather than to the columns, so they are read in a request of their own.
   useEffect(() => {
     if (!workspace) return;
@@ -146,12 +182,36 @@ function Picker({ context, directory, workspace, holder, held, navigate }: { con
   const shown = directories.slice(first);
   const deepest = directories[deepestIndex];
   const active = target && shown.includes(target.column) ? target.column : deepest;
-  const matchesOf = (query: string) => {
+  const activeLocation = locationAt(machine, active);
+  const matchesOf = (column: string, query: string) => {
     const needle = query.trim().toLowerCase();
-    return (entries.get(deepest) ?? []).filter(({ name }) => name.toLowerCase().includes(needle));
+    const buffer = buffers.get(locationAt(machine, column));
+    const state = buffer && columnState(buffer);
+    const doc = state && bufferChanged(state) ? state.doc : undefined;
+    const lines: number[] = [];
+    let number = 0;
+    for (const text of doc?.iterLines() ?? entries.get(column)?.map(entryText) ?? []) {
+      number++;
+      if (text && text.toLowerCase().includes(needle)) lines.push(number);
+    }
+    return lines;
   };
-  const matches = search === undefined ? [] : matchesOf(search);
-  const matchAt = Math.max(0, matches.findIndex(({ name }) => target?.column === deepest && target.name === name));
+  const matches = search === undefined ? [] : matchesOf(search.column, search.query);
+  const matchAt = Math.max(0, target?.column === search?.column && target?.line !== undefined ? matches.indexOf(target.line) : -1);
+  const searchIsVisible = search === undefined || shown.includes(search.column);
+  useEffect(() => {
+    if (!searchIsVisible) { restoreFocus.current = true; setSearch(undefined); }
+  }, [searchIsVisible]);
+  // A refreshed listing can shift a hit while the column keeps the cursor on that filename.
+  useLayoutEffect(() => {
+    if (!search || !searchIsVisible || !matches.length || target?.column !== search.column) return;
+    const buffer = buffers.get(locationAt(machine, search.column));
+    if (!(buffer instanceof EditorView)) return;
+    const { state } = buffer;
+    const cursor = state.doc.lineAt(state.selection.main.head).number;
+    const line = matches.includes(cursor) ? cursor : matches[0];
+    if (target.line !== line) setTarget({ column: search.column, line });
+  });
   const activate = (column: string) => {
     setTarget((current) => current?.column === column ? current : { column });
   };
@@ -167,15 +227,15 @@ function Picker({ context, directory, workspace, holder, held, navigate }: { con
   }, [held, entries, active, deepest]);
   useLayoutEffect(() => {
     const panel = pane.current?.closest<HTMLElement>('.sidebar-panel');
-    if (!panel) return;
+    if (!panel || review) return;
     const focus = (event?: Event) => {
       if (search !== undefined) {
         // A bare panel focus lets the shell's Ctrl+Shift+Q leave the search field.
         if (event?.type !== 'focus') panel.querySelector<HTMLInputElement>('.file-search input')?.focus();
         return;
       }
-      const view = views.current.get(active);
-      if (!view || document.activeElement === view.contentDOM) return;
+      const view = buffers.get(activeLocation);
+      if (!(view instanceof EditorView) || document.activeElement === view.contentDOM) return;
       view.focus();
       view.dom.closest('.file-column')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     };
@@ -189,14 +249,14 @@ function Picker({ context, directory, workspace, holder, held, navigate }: { con
       panel.removeEventListener('focus', focus);
       panel.removeEventListener('wangcai:shown', focus);
     };
-  }, [active, base, directory, dropped, error, menu, search]);
+  }, [activeLocation, base, directory, dropped, error, menu, review, search, buffers, vimPanels]);
   // Fit the widths after the columns have laid out, transferring focus if a column has to be dropped.
   useLayoutEffect(() => {
     const element = pane.current;
     if (widened || !element || !element.clientWidth || element.scrollWidth <= element.clientWidth || dropped >= deepestIndex) return;
     restoreFocus.current ||= element.contains(document.activeElement);
     setDropped(dropped + 1);
-  }, [directory, entries, dropped, deepestIndex, widened]);
+  }, [directory, entries, dropped, deepestIndex, review, widened, vimPanels]);
   // What the page is asked to show, always on this tab's machine.
   const showPath = (type: FileClick['type'], path: string) => navigate({ type, machine: directory.machine, path });
   const pick = (column: string, item: DirectoryEntry) => {
@@ -239,26 +299,129 @@ function Picker({ context, directory, workspace, holder, held, navigate }: { con
   const resetBase = () => {
     restoreFocus.current = true;
     setRaised(undefined);
-    if (!tops(workspace, directory.path)) showPath('directory', workspace);
+    if (!containsPath(workspace, directory.path)) showPath('directory', workspace);
+  };
+  const reviewChanges = (path: string) => {
+    const column = locationAt(machine, path);
+    try {
+      const columns: EditorState[] = [];
+      for (const [location, buffer] of buffers) {
+        if (location.machine === machine) columns.push(columnState(buffer));
+      }
+      const changes = planChanges(columns);
+      if (changes.length) {
+        let root = changes[0].directory;
+        for (const { change: { from, name } } of changes) {
+          while (root !== '/' && (!name.startsWith(`${root}/`) || (from !== undefined && !from.startsWith(`${root}/`)))) root = parentOf(root);
+        }
+        tab.message = undefined;
+        tab.review = { column, path: root, machine: directory.machine, changes };
+        tab.paint();
+      } else setEditMessage({ column, text: '没有目录变更' });
+    } catch (error) {
+      setEditMessage({ column, text: (error as Error).message, problem: true });
+    }
+  };
+  const closeReview = () => {
+    restoreFocus.current = true;
+    tab.review = undefined;
+    tab.paint();
+  };
+  const applyChanges = async () => {
+    if (!review || tab.applying) return;
+    const { column, path, machine, changes } = review;
+    tab.applying = true;
+    tab.paint();
+    try {
+      const result = await context.ui.request<DirectoryEditResult>('edit-directory', {
+        machine, path, changes: changes.map(({ change }) => ({
+          ...change, from: change.from === undefined ? undefined : relativeEntryPath(path, change.from), name: relativeEntryPath(path, change.name),
+        })),
+      });
+      const applied = result.applied.map((index) => changes[index]);
+      const affected = new Set<string>();
+      for (const { directory, sourceDirectory, change } of applied) {
+        affected.add(directory);
+        if (sourceDirectory !== undefined && !change.copy) affected.add(sourceDirectory);
+      }
+      const owner = machineKey(machine);
+      for (const directory of affected) {
+        const location = locationAt(owner, directory);
+        const buffer = buffers.get(location);
+        if (!buffer) continue;
+        const updates = recordApplied(columnState(buffer), applied, !result.problem);
+        if (buffer instanceof EditorView) buffer.update(updates);
+        else {
+          const next = updates[1].state;
+          if (bufferChanged(next)) buffers.set(location, next);
+          else buffers.delete(location);
+        }
+      }
+      const folders = applied.map(({ change }) => change).filter(({ isDirectory, from, copy, remove }) =>
+        isDirectory && !copy && (from !== undefined || remove));
+      if (folders.length) {
+        const pathAfter = (path: string, leaveRemoved = false) => {
+          for (const { from, name, remove } of folders) {
+            if (from !== undefined && containsPath(from, path)) path = name + path.slice(from.length);
+            if (leaveRemoved && remove && containsPath(name, path)) path = parentOf(name);
+          }
+          return path;
+        };
+        const known = locations.get(owner);
+        if (known) {
+          const moved = new Map<DirectoryLocation, string>();
+          for (const [path, location] of known) {
+            const next = pathAfter(path);
+            if (pathAfter(path, true) !== next) affected.add(next);
+            if (next === path) continue;
+            known.delete(path);
+            moved.set(location, next);
+          }
+          for (const [location, path] of moved) {
+            location.path = path;
+            known.set(path, location);
+            affected.add(path);
+          }
+        }
+        for (const current of tabs.values()) {
+          const shown = current.shown;
+          if (!shown || machineKey(shown.machine) !== owner) continue;
+          const path = pathAfter(shown.path, true);
+          if (path !== shown.path) show(context, current, { ...shown, path });
+          if (current !== tab) current.refresh?.(affected);
+        }
+      }
+      tab.refresh?.(affected.add(path));
+      if (result.problem) setEditMessage({ column, text: result.applied.length ? `已应用 ${result.applied.length} 项。${result.problem}` : result.problem, problem: true });
+    } catch (error) {
+      setEditMessage({ column, text: (error as Error).message, problem: true });
+    } finally {
+      tab.applying = false;
+      closeReview();
+    }
   };
   const command = (key: ColumnCommand, column: string, entry?: DirectoryEntry) => {
     if (key === 'parent') out();
+    else if (key === 'review') reviewChanges(column);
     else if (key === 'search') {
-      setTarget({ column, name: entry?.name });
-      setSearch('');
+      const buffer = buffers.get(locationAt(machine, column));
+      const state = buffer && columnState(buffer);
+      setTarget({ column, line: state?.doc.lineAt(state.selection.main.head).number });
+      setSearch({ column, query: '' });
     }
     else if (key === 'open' && entry) pick(column, entry);
     else if (key === 'download' && entry && !entry.isDirectory) download(column, entry.name);
   };
   // A query picks its first match as it is typed, so the box and the columns agree on what is held.
   const type = (query: string) => {
-    setSearch(query);
-    const [found] = matchesOf(query);
-    if (found) setTarget({ column: deepest, name: found.name });
+    if (!search) return;
+    const [line] = matchesOf(search.column, query);
+    setSearch({ ...search, query });
+    if (line !== undefined) setTarget({ column: search.column, line });
   };
   const searchStep = (delta: number) => {
-    const next = matches[Math.min(matches.length - 1, Math.max(0, matchAt + delta))];
-    if (next) setTarget({ column: deepest, name: next.name });
+    const line = matches[Math.min(matches.length - 1, Math.max(0, matchAt + delta))];
+    if (search && line !== undefined) setTarget({ column: search.column, line });
   };
   useEffect(() => {
     const panel = pane.current?.closest<HTMLElement>('.sidebar-panel');
@@ -293,39 +456,44 @@ function Picker({ context, directory, workspace, holder, held, navigate }: { con
   const release = () => {
     drag.current = undefined;
   };
-  if (error) return <div className="file-message" role="alert">{error}</div>;
   return <div className="file-columns">
     <div className="file-header">
-      <button className="file-button" aria-label="回到工作区" title={`回到工作区 ${workspace}`} disabled={base === workspace} onClick={resetBase}>
+      <button className="file-button" aria-label="回到工作区" title={`回到工作区 ${workspace}`} disabled={!!review || base === workspace} onClick={resetBase}>
         <svg className="file-glyph" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M3 9.5 10 3l7 6.5V17H3z" /><path d="M8 17v-4h4v4" /></svg>
       </button>
-      <div className="file-base" title={base}>{base}</div>
+      <div className="file-base" title={review?.path ?? base}>{review?.path ?? base}</div>
       {search !== undefined && <div className="file-search">
-        <input aria-label="搜索" placeholder="搜索本层" spellCheck={false} autoFocus value={search} onChange={(event) => type(event.target.value)} />
+        <input aria-label="搜索" placeholder="搜索本栏" spellCheck={false} autoFocus value={search.query} onChange={(event) => type(event.target.value)} />
         <span className="file-search-count">{matches.length ? `${matchAt + 1}/${matches.length}` : '无匹配'}</span>
       </div>}
     </div>
-    <div className="file-column-row" ref={pane} data-resized={widened ? '' : undefined} onPointerDown={() => {
-      const view = views.current.get(active);
-      const cm = view && getCM(view);
+    <div className="file-column-row" ref={pane} hidden={review !== undefined} data-resized={widened ? '' : undefined} onPointerDown={() => {
+      const view = buffers.get(activeLocation);
+      const cm = view instanceof EditorView ? getCM(view) : null;
       if (cm?.state.vim?.inputState.keyBuffer.length) Vim.handleKey(cm, '<Esc>', 'user');
       restoreFocus.current ||= search !== undefined;
       setSearch(undefined);
       setMenu(undefined);
     }}>
-      {shown.map((column, index) => {
+      {vimPanels && shown.map((column, index) => {
         const width = widths.get(column);
-        return <div key={column} className="file-column" style={width === undefined ? undefined : { width, maxWidth: 'none' }}>
-          <FileColumn path={column} views={views.current} listing={entries.get(column)} opened={shown[index + 1]}
+        const location = locationAt(machine, column);
+        return <div key={`${location.id}:${column}`} className="file-column" style={width === undefined ? undefined : { width, maxWidth: 'none' }}>
+          <FileColumn location={location} bottomContainer={vimPanels} buffers={buffers} listing={entries.get(column)} opened={shown[index + 1]}
             marks={git?.workspace === workspace ? git.marks : undefined} active={column === active}
             target={target?.column === column ? target : undefined} onFocus={activate} onCommand={command} onMenu={openMenu} />
           <div className="file-resize" role="separator" aria-orientation="vertical" aria-label={`调整 ${column} 的宽度`} onPointerDown={grab(column)} onPointerMove={widen} onPointerUp={release} onPointerCancel={release} />
         </div>;
       })}
     </div>
+    <div className="file-vim-panels" ref={setVimPanels} hidden={review !== undefined} />
     {menu && <div className="file-menu" role="menu" style={{ left: menu.x, top: menu.y }}>
       <button role="menuitem" onClick={() => download(menu.column, menu.name)}>下载到 Downloads</button>
     </div>}
+    {review ? <DirectoryEditReview path={review.path} plan={review.changes} applying={!!applying} onBack={closeReview} onApply={() => void applyChanges()} /> : <>
+      {error && <div className="file-edit-problem" data-problem role="alert">{error}</div>}
+      {editMessage?.column === activeLocation && <div className="file-edit-problem" data-problem={editMessage.problem || undefined} role="status">{editMessage.text}</div>}
+    </>}
     {note && <div className="file-note" role={note.problem ? 'alert' : undefined}>{note.text}</div>}
   </div>;
 }
@@ -361,7 +529,7 @@ function Page({ context, workspaceId, tab }: { context: UiContext; workspaceId?:
   const directory = tab.shown;
   return <section className="file-browser" aria-label="文件选择">
     {directory
-      ? <Picker context={context} directory={directory} workspace={workspace} holder={workspaceId ?? ''} held={tab.held} navigate={(file) => show(context, tab, file)} />
+      ? <Picker context={context} directory={directory} workspace={workspace} tab={tab} navigate={(file) => show(context, tab, file)} />
       : <div className="file-message" role={error ? 'alert' : undefined}>{error || (loading ? '正在读取…' : '请选择一个已连接的终端')}</div>}
   </section>;
 }
@@ -388,17 +556,20 @@ export function open(context: UiContext, record?: TabRecord) {
 
 function openTab(context: UiContext, workspaceId?: string) {
   const key = workspaceId ?? '';
-  const tab: Tab = { paint: () => {}, ...waiting.get(key) };
+  const tab: Tab = tabs.get(key) ?? { key, paint: () => {}, buffers: new Map() };
+  Object.assign(tab, waiting.get(key));
   waiting.delete(key);
   tabs.set(key, tab);
   context.host.tabs({ ...identity, workspaceId, onClose() {
-    if (tabs.get(key) === tab) tabs.delete(key);
+    if (tab.applying) return;
+    tab.review = undefined;
+    if (tabs.get(tab.key) === tab && ![...tab.buffers.values()].some((buffer) => bufferChanged(columnState(buffer)))) tabs.delete(tab.key);
   }, mount(container: HTMLElement) {
     container.style.fontFamily = font.family;
     const mounted = createRoot(container);
     tab.paint = () => mounted.render(<Page context={context} workspaceId={workspaceId} tab={tab} />);
     tab.paint();
-    return { onSelect: tab.paint, dispose: () => mounted.unmount() };
+    return { onSelect: tab.paint, dispose: () => { tab.paint = () => {}; mounted.unmount(); } };
   } });
 }
 
@@ -410,6 +581,7 @@ export async function mount(_container: HTMLElement, context: UiContext) {
     const unassigned = tabs.get('');
     if (activeWorkspaceId !== undefined && unassigned) {
       tabs.delete('');
+      unassigned.key = activeWorkspaceId;
       tabs.set(activeWorkspaceId, unassigned);
     }
   });

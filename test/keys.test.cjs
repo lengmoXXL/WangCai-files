@@ -5,7 +5,7 @@ const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
 const { baseBar, basePath, columnOf, columnRow, columns, cursor, entry, held, lists, names, openFilesWorkspace, resizeHandle, searchBox, searchCount, searchField, shownPanel, width } = require('./files-ui.cjs');
 
-test('the keys walk the columns, the search filters the level being picked from, and a drag widens a column', { timeout: 180000 }, () => withWindow('wangcai-keys', lists, async ({ home, page, errors }) => {
+test('the keys walk the columns, search tracks matches in the focused column, and a drag widens a column', { timeout: 180000 }, () => withWindow('wangcai-keys', lists, async ({ home, page, errors }) => {
   mkdirSync(join(home, 'sub/deep'), { recursive: true });
   writeFileSync(join(home, 'sub/inside.md'), '# Inside\n');
   writeFileSync(join(home, 'alpha.md'), 'a\n');
@@ -36,6 +36,7 @@ test('the keys walk the columns, the search filters the level being picked from,
   // The deepest column holds the cursor as soon as its listing is in, so the keys move before anything is clicked.
   await until(async () => (await cursor(page).count()) === 1);
   const listed = await names(directory);
+  assert.ok(listed.indexOf('sub/') < listed.indexOf('alpha.md'), 'directories precede files');
   assert.deepEqual(await held(page), [listed[0], home]);
   const block = directory.locator('.cm-fat-cursor').first();
   const blockX = async () => (await block.boundingBox())?.x;
@@ -51,7 +52,9 @@ test('the keys walk the columns, the search filters the level being picked from,
   await page.keyboard.type('2k');
   assert.deepEqual(await held(page), [listed[0], home]);
   await page.keyboard.type('dd');
-  assert.deepEqual(await names(directory), listed, 'Vim editing keeps the directory buffer read-only');
+  assert.deepEqual(await names(directory), listed.slice(1), 'Vim edits the directory buffer in place');
+  await page.keyboard.press('u');
+  assert.deepEqual(await names(directory), listed, 'Vim undo restores the directory row');
   await basePath(page).click();
   await page.keyboard.press('j');
   assert.deepEqual(await held(page), [listed[1], home]);
@@ -92,11 +95,41 @@ test('the keys walk the columns, the search filters the level being picked from,
   const sub = await enter(join(home, 'sub'));
   await until(async () => (await held(page))[0] === 'deep/');
   assert.deepEqual(await held(page), ['deep/', join(home, 'sub')]);
+  await page.keyboard.press(':');
+  const vimPanel = shownPanel(page).locator('.file-vim-panels > .cm-panels-bottom');
+  const [panelColor, themeColor] = await vimPanel.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const canvas = document.createElement('canvas').getContext('2d');
+    canvas.fillStyle = style.getPropertyValue('--wc-background').trim();
+    const theme = canvas.fillStyle;
+    canvas.fillStyle = style.backgroundColor;
+    return [canvas.fillStyle, theme];
+  });
+  assert.equal(panelColor, themeColor);
+  const strip = await vimPanel.boundingBox();
+  const row = await pane.boundingBox();
+  assert.equal(strip.x, row.x);
+  assert.equal(strip.width, row.width);
+  assert.equal(Math.round(strip.y), Math.round(row.y + row.height));
+  await vimPanel.locator('input').fill('s/^deep/changed/');
+  await page.keyboard.press('Enter');
+  await vimPanel.locator('input').waitFor({ state: 'detached' });
+  await entry(sub, 'changed/').waitFor();
+  await page.keyboard.press('u');
+  await entry(sub, 'deep/').waitFor();
   await page.keyboard.press('H');
   await sub.waitFor({ state: 'detached' });
   assert.deepEqual(await held(page), ['sub/', home]);
-  // A query looks through the deepest column alone: `alpha.md` sits a column up, so it is not a hit.
+  // The search follows focus. `alpha.md` only matches in the column where it is listed.
   await enter(join(home, 'sub'));
+  await page.keyboard.press('Shift+Tab');
+  await until(async () => (await held(page))[1] === home);
+  await search('alpha');
+  await until(async () => (await searchCount(page)) === '1/1');
+  await closeSearch();
+  assert.deepEqual(await held(page), ['alpha.md', home], 'a search started in the left column stays there');
+  await page.keyboard.press('Tab');
+  await until(async () => (await held(page))[1] === join(home, 'sub'));
   await search('alpha');
   await until(async () => (await searchCount(page)) === '无匹配');
   await closeSearch();
@@ -107,6 +140,9 @@ test('the keys walk the columns, the search filters the level being picked from,
   assert.deepEqual(await held(page), ['deep/', join(home, 'sub')]);
   await page.keyboard.press('ArrowDown');
   await until(async () => (await searchCount(page)) === '2/2');
+  writeFileSync(join(home, 'sub/000.txt'), 'added during the search');
+  await entry(sub, '000.txt').waitFor();
+  assert.equal(await searchCount(page), '2/2');
   await closeSearch();
   assert.deepEqual(await held(page), ['inside.md', join(home, 'sub')], 'closing the box leaves the cursor where the arrows put it');
   // A click closes the box, because the pointer goes down on the pane before the entry is clicked.

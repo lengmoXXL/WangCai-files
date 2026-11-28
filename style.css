@@ -16,6 +16,7 @@
 .file-view, .file-view .cm-editor { height: 100%; min-width: 0; }
 .file-view .cm-editor.cm-focused { outline: none; }
 .file-view .cm-editor .cm-scroller { font-family: inherit; overflow: auto; scrollbar-width: none; }
+.file-view .cm-editor .cm-cursor { border-left-color: var(--wc-cursor); }
 .file-view .cm-content .cm-line {
   --file-row-inset: 8px;
   position: relative;
@@ -44,6 +45,10 @@
 .file-view .cm-line[data-git=A], .file-view .cm-line[data-git=R], .file-view .cm-line[data-git=C], .file-view .cm-line[data-git=U] { color: var(--wc-green); }
 .file-view .cm-line[data-git=D], .file-view .cm-line[data-git='!'] { color: var(--wc-red); }
 .file-empty { position: absolute; top: 0; left: 0; pointer-events: none; }
+.file-vim-panels { flex-shrink: 0; }
+.file-columns > .file-vim-panels > .cm-panels { background: var(--wc-background); color: var(--wc-foreground); border-top: 1px solid var(--wc-border); }
+.file-vim-panels > .cm-panels:not(:last-child) { display: none; }
+.file-vim-panels .cm-vim-panel input { color: inherit; }
 
 /* The path bar: the base path the columns start from, and the button that puts it back on the workspace. */
 .file-header { position: relative; flex-shrink: 0; display: flex; align-items: center; gap: 4px; min-width: 0; padding: 3px 6px; border-bottom: 1px solid var(--wc-border); }
@@ -64,3 +69,16 @@
 /* What the last download says, in a line of its own under the columns, so no entry is pushed by it. */
 .file-note { flex-shrink: 0; padding: 4px 8px; border-top: 1px solid var(--wc-border); color: var(--wc-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-note[role=alert] { color: var(--wc-red); }
+
+.file-edit-button { flex-shrink: 0; padding: 3px 7px; border: 0; border-radius: 4px; color: var(--wc-foreground); background: transparent; font: inherit; cursor: pointer; }
+.file-edit-button:hover:not(:disabled), .file-edit-primary { background: var(--wc-overlay); }
+.file-edit-button:disabled { opacity: 0.45; cursor: default; }
+.file-column-row[hidden] { display: none; }
+.file-edit-review { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.file-edit-summary { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 8px 12px 0; }
+.file-edit-summary span, .file-edit-button kbd { color: var(--wc-muted); }
+.file-edit-button kbd { margin-left: 6px; font: inherit; font-size: 11px; }
+.file-edit-changes { flex: 1; margin: 0; padding: 8px 12px 8px 26px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-edit-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; padding: 4px 6px; border-top: 1px solid var(--wc-border); }
+.file-edit-problem { padding: 4px 8px; color: var(--wc-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-edit-problem[data-problem] { color: var(--wc-red); }

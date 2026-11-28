@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { join, posix } from 'node:path';
 import { workspaceAlias, type MachineConnection } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
-import { machineKey, type FileClick, type GitLetter, type GitStatus } from './shared';
+import { editDirectory } from './directory-edit';
+import { machineKey, type DirectoryChange, type DirectoryEditResult, type FileClick, type GitLetter, type GitStatus } from './shared';
 
 export const keys = { '<leader>f': { global: true, insert: true, desc: '打开文件视图', event: 'core:show-view', data: { plugin: 'files' } } };
 
@@ -89,6 +90,18 @@ export function activate(context: MainContext) {
       entries.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name));
       return { path: directory, entries };
     })));
+
+  const edits = new Map<string, Promise<DirectoryEditResult>>();
+  handlers.push(context.ui.handle('edit-directory', async ({ machine, path, changes }: { machine: FileClick['machine']; path: string; changes: DirectoryChange[] }) => {
+    if (!posix.isAbsolute(path)) throw new Error('目录路径必须是绝对路径');
+    const cwd = posix.resolve(path);
+    const key = JSON.stringify([machineKey(machine), cwd]);
+    const next = (edits.get(key) ?? Promise.resolve()).catch(() => undefined)
+      .then(() => withConnection(machine, (connection) => editDirectory(connection, cwd, changes)));
+    edits.set(key, next);
+    try { return await next; }
+    finally { if (edits.get(key) === next) edits.delete(key); }
+  }));
 
   // What git paints for the directory a picker shows: `status` answers with paths relative to the repository
   // root, so one reading covers the whole repository rather than just the directory asked about.
