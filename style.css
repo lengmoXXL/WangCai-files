@@ -12,21 +12,38 @@
 .file-resize::after { content: ''; position: absolute; top: 0; right: 2px; bottom: 0; width: 2px; }
 .file-resize:hover::after, .file-resize:active::after { background: var(--wc-accent); }
 
-.file-list { flex: 1; min-width: 0; overflow: auto; scrollbar-width: none; }
-.file-list::-webkit-scrollbar { display: none; }
-.file-list button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
-.file-list button:hover { background: var(--wc-overlay); }
-.file-list button[aria-current] { background: var(--wc-selection); }
-/* The cursor's ring is the keys' place in the list, drawn while the panel they are handed to has the focus. */
-.sidebar-panel:focus-within .file-list button[data-cursor] { outline: 1px solid var(--wc-accent); outline-offset: -1px; }
-.file-list button:focus-visible { outline: 2px solid var(--wc-accent); outline-offset: -2px; }
-.file-list button .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--wc-muted); }
-.file-icon[data-kind=folder] { color: var(--wc-yellow); }
-.file-git { flex-shrink: 0; margin-left: auto; padding-left: 8px; font-size: 11px; font-weight: 600; }
-.file-list button[data-git=M], .file-list button[data-git=T] { color: var(--wc-yellow); }
-.file-list button[data-git=A], .file-list button[data-git=R], .file-list button[data-git=C], .file-list button[data-git=U] { color: var(--wc-green); }
-.file-list button[data-git=D], .file-list button[data-git='!'] { color: var(--wc-red); }
+.file-list { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+.file-view, .file-view .cm-editor { height: 100%; min-width: 0; }
+.file-view .cm-editor.cm-focused { outline: none; }
+.file-view .cm-editor .cm-scroller { font-family: inherit; overflow: auto; scrollbar-width: none; }
+.file-view .cm-content .cm-line {
+  --file-row-inset: 8px;
+  position: relative;
+  padding: 0 var(--file-row-inset) 0 calc(var(--file-row-inset) + 2ch);
+}
+.file-view .cm-line[data-kind]::after {
+  content: '\f016' / '';
+  position: absolute;
+  top: 0;
+  left: var(--file-row-inset);
+  color: var(--wc-muted);
+  font-family: 'Symbols Nerd Font Mono', 'DejaVuSansM Nerd Font Mono', var(--wc-font);
+  pointer-events: none;
+}
+.file-view .cm-line[data-kind=directory]::after { content: '\f07b' / ''; }
+.file-view .cm-line[title] { cursor: pointer; }
+.file-view .cm-line:hover::before, .file-view .cm-line[aria-current]::before {
+  content: ''; position: absolute; inset: 0; z-index: -4; background: var(--wc-overlay); pointer-events: none;
+}
+.file-view .cm-line[aria-current]::before { background: var(--wc-selection); }
+.file-list:not([data-active]) .cm-vimCursorLayer, .file-list[data-empty] .cm-vimCursorLayer { display: none; }
+.file-view .cm-editor.cm-focused .cm-fat-cursor { background: var(--wc-cursor); color: var(--wc-background) !important; }
+.file-view .cm-editor:not(.cm-focused) .cm-fat-cursor { outline-color: var(--wc-cursor); }
+.file-view .cm-editor.cm-focused .cm-selectionLayer .cm-selectionBackground { background: var(--wc-selection); }
+.file-view .cm-line[data-git=M], .file-view .cm-line[data-git=T] { color: var(--wc-yellow); }
+.file-view .cm-line[data-git=A], .file-view .cm-line[data-git=R], .file-view .cm-line[data-git=C], .file-view .cm-line[data-git=U] { color: var(--wc-green); }
+.file-view .cm-line[data-git=D], .file-view .cm-line[data-git='!'] { color: var(--wc-red); }
+.file-empty { position: absolute; top: 0; left: 0; pointer-events: none; }
 
 /* The path bar: the base path the columns start from, and the button that puts it back on the workspace. */
 .file-header { position: relative; flex-shrink: 0; display: flex; align-items: center; gap: 4px; min-width: 0; padding: 3px 6px; border-bottom: 1px solid var(--wc-border); }

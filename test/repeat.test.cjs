@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { existsSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { columnOf, columnRow, columns, cursor, entry, held, lists, names, openFilesWorkspace } = require('./files-ui.cjs');
+const { columnOf, columns, cursor, entry, held, lists, names, openFilesWorkspace } = require('./files-ui.cjs');
 
 test('a held `j`, `k` or arrow walks on with every repeat, and the other keys stay single', { timeout: 180000 }, () => withWindow('wangcai-repeat', lists, async ({ home, page, errors }) => {
   writeFileSync(join(home, 'alpha.md'), 'a\n');
@@ -15,8 +15,8 @@ test('a held `j`, `k` or arrow walks on with every repeat, and the other keys st
   await until(async () => (await cursor(page).count()) === 1);
   const listed = await names(directory);
   // The driver's presses are single ones, so the repeat the system would send for a held key is made here.
-  const again = (key) => columnRow(page).evaluate((pane, key) => {
-    pane.dispatchEvent(new KeyboardEvent('keydown', { key, repeat: true, bubbles: true }));
+  const again = (key) => page.evaluate((key) => {
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key, repeat: true, bubbles: true, cancelable: true }));
   }, key);
   assert.deepEqual(await held(page), [listed[0], home]);
   await again('j');
@@ -32,12 +32,12 @@ test('a held `j`, `k` or arrow walks on with every repeat, and the other keys st
   await page.keyboard.press('g');
   await page.keyboard.press('g');
   const opened = await columns(page).count();
-  await again('l');
-  assert.equal(await columns(page).count(), opened, 'a held `l` opened no column');
+  await again('L');
+  assert.equal(await columns(page).count(), opened, 'a repeated `L` opened no column');
   await page.keyboard.press('G');
-  await again('d');
+  await again('D');
   await page.waitForTimeout(300);
-  assert.ok(!existsSync(join(home, 'Downloads')), 'a held `d` downloaded nothing');
+  assert.ok(!existsSync(join(home, 'Downloads')), 'a repeated `D` downloaded nothing');
   // With the box open the panel binds the `insert` set alone, so the column keys no longer answer.
   await page.keyboard.press('/');
   await page.locator('.file-search input').waitFor();

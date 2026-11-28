@@ -10,14 +10,11 @@ const openWorkspaceMenu = async (page) => {
   await page.mouse.click(box.x + box.width / 2, box.y + box.height - 4, { button: 'right' });
 };
 
-/** Waits until the terminal in front draws that text, which it does once the shell has written it. */
-const terminalShows = (page, text) => page.locator('.terminal-pane.active .xterm-screen').filter({ hasText: text }).waitFor();
-
-/** Opens a local workspace, and waits for the shell its pane draws a moment after the workspace appears. */
+/** Opens a local workspace and waits for its terminal surface to mount. */
 const createWorkspace = async (page) => {
   await openWorkspaceMenu(page);
   await page.locator('#workspace-row-menu').getByRole('menuitem', { name: '新建 本机', exact: true }).click();
-  await terminalShows(page, /\S/);
+  await page.locator('.terminal-pane.active .xterm-screen').waitFor();
 };
 
 /** Opens a view in the sidebar, showing the sidebar first when it is off screen. */
@@ -34,11 +31,10 @@ const machine = { id: 'local', name: '本机' };
 // What a case's window lists: the workspace a directory link comes from, and the editor a file is handed to.
 const lists = { workspaces: ['terminal-agent'], tabs: ['files', 'editor'] };
 
-// The columns the panel lays out, one per directory of the path it shows, a column's entries as buttons, and the note an
-// empty directory shows in place of them.
+// The panel draws one buffer per visible directory, and an empty directory says so.
 const columns = (page) => page.locator('.file-column');
 const columnOf = (page, path) => page.getByRole('navigation', { name: path, exact: true });
-const entry = (column, name) => column.getByRole('button', { name, exact: true });
+const entry = (column, name) => column.locator('.cm-line[title]').and(column.getByText(name, { exact: true }));
 const emptyDirectory = (page) => page.getByText('空目录', { exact: true });
 
 // The sidebar's own tabs, as the window draws them, plus the panel on show in the right sidebar and every panel of this
@@ -70,17 +66,20 @@ const codeView = (scope, text) => scope.locator('.editor-code .cm-content').filt
 const pathBox = (scope) => scope.getByRole('textbox', { name: '路径', exact: true });
 const waitForPath = (scope, path) => until(async () => (await pathBox(scope).first().inputValue()) === path);
 
-// The row the keys stand on.
-const cursor = (page) => page.locator('.file-list button[data-cursor]');
+const cursor = (page) => shownPanel(page).locator('.file-list[data-active]:not([data-empty]) .cm-fat-cursor.cm-cursor-primary');
 
-// The label of a row.
-const label = (row) => row.locator('.file-name');
-
-// What the cursor holds: the name it shows and the column that lists it.
-const held = async (page) => [
-  await label(cursor(page)).innerText(),
-  await cursor(page).evaluate((element) => element.closest('nav').getAttribute('aria-label')),
-];
+// Vim draws its block in a layer over the rows, after CodeMirror measures the current frame.
+const held = (page) => cursor(page).evaluate(async (block) => {
+  const list = block.closest('nav');
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  const { top, height } = list.querySelector('.cm-fat-cursor.cm-cursor-primary').getBoundingClientRect();
+  const middle = top + height / 2;
+  const row = [...list.querySelectorAll('.cm-line[title]')].find(element => {
+    const bounds = element.getBoundingClientRect();
+    return bounds.top <= middle && middle < bounds.bottom;
+  });
+  return [row?.textContent, list.getAttribute('aria-label')];
+});
 
 // The box `/` opens over the path bar, its field, and the count it shows.
 const searchBox = (page) => page.locator('.file-search');
@@ -96,7 +95,7 @@ const resetBase = (page) => baseBar(page).getByRole('button', { name: '回到工
 const columnRow = (page) => page.locator('.file-column-row');
 
 // The names one column lists, in the order it lists them.
-const names = (column) => label(column).evaluateAll((elements) => elements.map((element) => element.innerText));
+const names = (column) => column.locator('.cm-line[title]').allInnerTexts();
 
 // The handle on a column's right edge, which the mouse drags to widen it.
 const resizeHandle = (column) => column.locator('.file-resize');
@@ -129,7 +128,6 @@ module.exports = {
   codeView,
   waitForPath,
   cursor,
-  label,
   held,
   searchBox,
   searchField,

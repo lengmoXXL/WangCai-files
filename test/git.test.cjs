@@ -4,7 +4,7 @@ const { execFileSync } = require('node:child_process');
 const { mkdirSync, rmSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { columnOf, entry, label, lists, mark, openFilesWorkspace } = require('./files-ui.cjs');
+const { columnOf, entry, lists, mark, openFilesWorkspace } = require('./files-ui.cjs');
 
 test('the columns mark git changes the way VS Code does', { timeout: 180000 }, () => withWindow('wangcai-git', lists, async ({ home, page, errors }) => {
   const git = (...args) => execFileSync('git', args, { cwd: home, encoding: 'utf8' });
@@ -34,11 +34,7 @@ test('the columns mark git changes the way VS Code does', { timeout: 180000 }, (
   git('mv', 'old name.txt', 'new name.txt');
   await openFilesWorkspace(page);
   const directory = columnOf(page, home);
-  const stateOf = async (column, name) => {
-    const one = entry(column, name);
-    return (await one.count()) ? one.getAttribute('data-git') : null;
-  };
-  const colour = (column, name) => label(entry(column, name)).evaluate((element) => getComputedStyle(element).color);
+  const colour = (column, name) => entry(column, name).evaluate((element) => getComputedStyle(element).color);
   // The marks take the shell's own theme tokens, so the colours are read out of the page rather than written down here.
   const theme = (name) => page.evaluate((name) => {
     const probe = document.createElement('div');
@@ -49,25 +45,22 @@ test('the columns mark git changes the way VS Code does', { timeout: 180000 }, (
     return colour;
   }, name);
   const [yellow, green, red] = [await theme('--wc-yellow'), await theme('--wc-green'), await theme('--wc-red')];
-  const badge = (column, name) => entry(column, name).locator('.file-git');
   assert.deepEqual([await mark(directory, 'kept.txt'), await colour(directory, 'kept.txt')], ['M', yellow]);
   assert.deepEqual([await mark(directory, 'fresh.txt'), await colour(directory, 'fresh.txt')], ['U', green]);
   assert.deepEqual([await mark(directory, 'staged.txt'), await colour(directory, 'staged.txt')], ['A', green]);
   assert.deepEqual([await mark(directory, 'new name.txt'), await colour(directory, 'new name.txt')], ['R', green]);
   // A deleted file is gone from the listing, so its folder is what carries the state.
   assert.deepEqual([await mark(directory, 'dropped/'), await colour(directory, 'dropped/')], ['D', red]);
-  // A folder holding a change takes its colour without a badge, and a file git never mentions takes neither.
-  assert.deepEqual([await mark(directory, 'sub/'), await colour(directory, 'sub/'), await badge(directory, 'sub/').count()], ['M', yellow, 0]);
-  assert.deepEqual([await stateOf(directory, 'clean.txt'), await badge(directory, 'clean.txt').count()], [null, 0]);
+  assert.deepEqual([await mark(directory, 'sub/'), await colour(directory, 'sub/')], ['M', yellow]);
+  assert.equal(await entry(directory, 'clean.txt').getAttribute('data-git'), null);
   assert.deepEqual([await mark(directory, 'loose/'), await colour(directory, 'loose/')], ['U', green]);
-  // The badge names the state to a pointing reader, while the row's accessible name stays the file's own.
-  assert.deepEqual([await badge(directory, 'kept.txt').innerText(), await entry(directory, 'kept.txt').getAttribute('title')], ['M', 'kept.txt · 已修改']);
+  assert.equal(await entry(directory, 'kept.txt').getAttribute('title'), 'kept.txt · 已修改');
   // A level below keeps the marks it has, so a folder is only a way in.
   await entry(directory, 'sub/').click();
   const nested = columnOf(page, join(home, 'sub'));
   await nested.waitFor();
   assert.equal(await mark(nested, 'nested.txt'), 'M');
-  assert.equal(await badge(nested, 'nested.txt').innerText(), 'M');
+  assert.equal(await colour(nested, 'nested.txt'), yellow);
   assert.deepEqual(errors, []);
   await page.screenshot({ path: 'test/output/screenshots/git-marks.png' });
 }));

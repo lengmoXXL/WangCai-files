@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdirSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { baseBar, columnOf, columnRow, columns, cursor, entry, held, lists, names, openFilesWorkspace, resizeHandle, searchBox, searchCount, searchField, shownPanel, width } = require('./files-ui.cjs');
+const { baseBar, basePath, columnOf, columnRow, columns, cursor, entry, held, lists, names, openFilesWorkspace, resizeHandle, searchBox, searchCount, searchField, shownPanel, width } = require('./files-ui.cjs');
 
 test('the keys walk the columns, the search filters the level being picked from, and a drag widens a column', { timeout: 180000 }, () => withWindow('wangcai-keys', lists, async ({ home, page, errors }) => {
   mkdirSync(join(home, 'sub/deep'), { recursive: true });
@@ -13,6 +13,10 @@ test('the keys walk the columns, the search filters the level being picked from,
   await openFilesWorkspace(page);
   const directory = columnOf(page, home);
   await entry(directory, 'alpha.md').waitFor();
+  const [folderIcon, fileIcon] = await Promise.all(['sub/', 'alpha.md'].map(name =>
+    entry(directory, name).evaluate(row => getComputedStyle(row, '::after').content)));
+  assert.match(folderIcon, /\uf07b/);
+  assert.match(fileIcon, /\uf016/);
   const search = async (query) => {
     await page.keyboard.press('/');
     await searchField(page).waitFor();
@@ -24,7 +28,7 @@ test('the keys walk the columns, the search filters the level being picked from,
     await boxGone();
   };
   const enter = async (path) => {
-    await page.keyboard.press('l');
+    await page.keyboard.press('L');
     const column = columnOf(page, path);
     await column.waitFor();
     return column;
@@ -33,6 +37,22 @@ test('the keys walk the columns, the search filters the level being picked from,
   await until(async () => (await cursor(page).count()) === 1);
   const listed = await names(directory);
   assert.deepEqual(await held(page), [listed[0], home]);
+  const block = directory.locator('.cm-fat-cursor').first();
+  const blockX = async () => (await block.boundingBox())?.x;
+  await block.waitFor();
+  const start = await blockX();
+  await page.keyboard.press('l');
+  await until(async () => (await blockX()) > start);
+  await page.keyboard.press('h');
+  await until(async () => (await blockX()) === start);
+  assert.deepEqual(await held(page), [listed[0], home]);
+  await page.keyboard.type('2j');
+  assert.deepEqual(await held(page), [listed[2], home]);
+  await page.keyboard.type('2k');
+  assert.deepEqual(await held(page), [listed[0], home]);
+  await page.keyboard.type('dd');
+  assert.deepEqual(await names(directory), listed, 'Vim editing keeps the directory buffer read-only');
+  await basePath(page).click();
   await page.keyboard.press('j');
   assert.deepEqual(await held(page), [listed[1], home]);
   await page.keyboard.press('k');
@@ -68,11 +88,11 @@ test('the keys walk the columns, the search filters the level being picked from,
   assert.ok(box.y >= bar.y && box.y + box.height <= bar.y + bar.height + 1, 'the box sits in the path bar');
   await until(async () => (await held(page))[0] === 'sub/');
   await closeSearch();
-  // `l` goes down a level and the cursor goes with it, while `h` comes back up onto the directory it left.
+  // `L` goes down a level and the cursor goes with it, while `H` comes back up onto the directory it left.
   const sub = await enter(join(home, 'sub'));
   await until(async () => (await held(page))[0] === 'deep/');
   assert.deepEqual(await held(page), ['deep/', join(home, 'sub')]);
-  await page.keyboard.press('h');
+  await page.keyboard.press('H');
   await sub.waitFor({ state: 'detached' });
   assert.deepEqual(await held(page), ['sub/', home]);
   // A query looks through the deepest column alone: `alpha.md` sits a column up, so it is not a hit.
